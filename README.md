@@ -1,6 +1,7 @@
 # Escape Roomba
 
-Removing the dust bunnies from the Escape Rooms Discord, since 2020:
+*Removing the dust bunnies from the Escape Rooms Discord, since 2020.*
+
 This is an experimental Discord bot to support the Escape Rooms Discord
 community.
 
