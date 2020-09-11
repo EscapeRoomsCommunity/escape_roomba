@@ -2,7 +2,7 @@
 name = "escape_roomba"
 version = "0.1.0"
 description = ""
-authors = ["Your Name <you@example.com>"]
+authors = ["Dan Egnor <egnor@ofb.net>", "Ana Ulin <ana@ulin.org>"]
 
 [tool.poetry.scripts]
 run_bot = 'escape_roomba.run_bot:main'

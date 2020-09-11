@@ -9,14 +9,13 @@ class Context:
         self.client = client
         self._event_listeners = {}
 
+    # discord.Client only dispatches one callback per event type
+    # (discordpy.readthedocs.io/en/latest/api.html#discord.Client.event);
+    # discord.ext.commands.Bot/.Cog allow multiple subscribers, but also
+    # assume a specific UX, so we implement our own simple broadcasting.
     def add_listener(self, event_name, handler):
         """Registers an async function for a Discord event (like 'on_message').
         Multiple functions can be registered for the same event name."""
-
-        # discord.Client only supports one (static-ish) callback per event
-        # (discordpy.readthedocs.io/en/latest/api.html#discord.Client.event);
-        # discord.ext.commands.Bot/.Cog allow multiple subscribers, but also
-        # assume a specific UX, so we implement our own simple broadcasting.
 
         # Fail up front if the callback has the wrong type.
         # (Sadly, discord.Client has no way to verify valid event names!)
