@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "escape_roomba"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.scripts]
+run_bot = 'escape_roomba.run_bot:main'
+
+[tool.poetry.dependencies]
+python = "^3.8"
+"discord.py" = "^1.4.1"
+
+[tool.poetry.dev-dependencies]
+autopep8 = "^1.5.4"
+
+[build-system]
+requires = ["poetry-core>=1.0.0a5"]
+build-backend = "poetry.core.masonry.api"
