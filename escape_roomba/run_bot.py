@@ -66,7 +66,7 @@ class StatusLogger:
                 manage_messages=True,
                 read_message_history=True,
                 manage_roles=True))
-        logging.info(f'Invite link to add servers:\n' + f'    {invite_url}')
+        logging.info(f'Invite link, open in browser to add servers:\n' + f'    {invite_url}')
 
     async def on_guild_join(self, guild):
         logging.info(f'Joined Discord guild (server) "{guild.name}"')
