@@ -1,9 +1,14 @@
-# Escape Roomba
+# Escape Roomba <!-- omit in toc -->
 
 *Removing the dust bunnies from the Escape Rooms Discord, since 2020.*
 
 This is an experimental Discord bot to support the Escape Rooms Discord
 community.
+
+- [Useful Resources](#useful-resources)
+- [Developer setup instructions (Mac or Linux)](#developer-setup-instructions-mac-or-linux)
+  - [Basic build setup](#basic-build-setup)
+  - [Setting up a test bot on Discord](#setting-up-a-test-bot-on-discord)
 
 ## Useful Resources
 
@@ -18,7 +23,7 @@ community.
 1. [Install "poetry"](https://python-poetry.org/docs/#installation), the
 Python dependency manager. **Beware of
 [bug 721](https://github.com/python-poetry/poetry/issues/721) which affects
-installation.** 
+installation.**
 2. [Install direnv](https://direnv.net/docs/installation.html) (optional, but
 recommended).
 3. In this directory, run `poetry install`.
