@@ -5,8 +5,9 @@ import inspect
 class Context:
     """Global data shared by bot subfunctions."""
 
-    def __init__(self, client):
+    def __init__(self, client, logger):
         self.client = client
+        self.logger = logger
         self._event_listeners = {}
 
     # discord.Client only dispatches one callback per event type
@@ -40,9 +41,10 @@ class Context:
         # Add to the listener list (captured by run() above).
         listeners.append(handler)
 
-    def add_listener_methods(self, obj):
-        """Adds all methods named 'on_*' for an object as event listeners."""
+    def add_listener_methods(self, obj, prefix='on_'):
+        """Adds designated object methods (default 'on_*') as listeners."""
 
         for attr_name in dir(obj):
-            if attr_name.startswith('on_'):
-                self.add_listener(attr_name, getattr(obj, attr_name))
+            if attr_name.startswith(prefix):
+                event_name = f'on_{attr_name[len(prefix):]}'
+                self.add_listener(event_name, getattr(obj, attr_name))
