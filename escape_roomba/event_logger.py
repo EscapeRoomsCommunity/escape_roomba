@@ -11,7 +11,9 @@ class EventLogger:
     def __init__(self, context):
         """Initialize with an escape_roomba.context.Context object."""
         self.context = context
-        self.debug = self.context.logger.debug  # Shortcut methods
+
+        # Shortcut logging methods.
+        self.debug = self.context.logger.debug
         self.info = self.context.logger.info
 
         context.add_listener_methods(self)
@@ -140,9 +142,18 @@ class EventLogger:
         self.debug(f'Server UN-available {self._format(g=g)}')
 
     def _format(self, g=None, c=None, u=None, m=None):
-        """Pretty-print Guild (or ID), (Guild/Private)Channel (or ID),
-        User/Member (or ID), and/or Message (or ID) for some object.
-        Returns a string formatted for debug output."""
+        """Pretty-formats Discord structures associated with some action.
+
+        Args:
+            g: Guild, int guild ID, or None
+            c: GuildChannel, PrivateChannel, int channel ID, or None
+            u: User, Member, int user ID, or None
+            m: Message, int message ID, or None
+
+        Returns:
+            A string describing all the given parameters, e.g.
+            '"guild" #channel (user#1234) "message text"'
+        """
 
         # Look up raw IDs, if possible.
         if isinstance(g, int):
@@ -164,25 +175,24 @@ class EventLogger:
 
         # Accumulate output that will be assembled with spaces.
         # The final format will be part or all of this:
-        #    "guild" #channel (user#1234) "message text"
         out = []
 
         if isinstance(g, discord.Guild):
             out.append(f'"{g}"')
         elif g:
-            out.append(f'g={format_id(g)}')
+            out.append(f'g={self._format_id(g)}')
 
         if isinstance(c, discord.abc.GuildChannel):
             out.append(f'#{c}')
         elif isinstance(c, discord.abc.PrivateChannel):
             out.append(f'PRIVATE #{c}')
         elif c:
-            out.append(f'c={format_id(c)}')
+            out.append(f'c={self._format_id(c)}')
 
         if isinstance(u, discord.Member) or isinstance(u, discord.User):
             out.append(f'({u})')
         elif u:
-            out.append(f'u={format_id(u)}')
+            out.append(f'u={self._format_id(u)}')
 
         if isinstance(m, discord.Message):
             text = ' '.join(m.content.split())
@@ -191,24 +201,25 @@ class EventLogger:
             if out: out[-1] = out[-1] + ':'
             out.append(f'"{text}"')
         elif m:
-            out.append(f'm={format_id(m)}')
+            out.append(f'm={self._format_id(m)}')
 
         return ' '.join(out) if out else '(None)'
 
+    @staticmethod
+    def _format_id(id):
+        """Pretty-prints a "snowflake" ID value (see
+        https://discordpy.readthedocs.io/en/latest/api.html#discord.abc.Snowflake,
+        https://discord.com/developers/docs/reference#snowflakes,
+        https://github.com/twitter-archive/snowflake/tree/snowflake-2010)."""
 
-def format_id(id):
-    """Pretty-print a "snowflake" ID value (see
-    https://discordpy.readthedocs.io/en/latest/api.html#discord.abc.Snowflake,
-    https://discord.com/developers/docs/reference#snowflakes,
-    https://github.com/twitter-archive/snowflake/tree/snowflake-2010)."""
+        if isinstance(id, discord.abc.Snowflake):
+            id = id.id
+        if not isinstance(id, int):
+            return f'?{repr(id)}?'  # Unknown type!
 
-    if isinstance(id, discord.abc.Snowflake):
-        id = id.id
-    if not isinstance(id, int):
-        return f'?{repr(id)}?'  # Unknown type!
-
-    dt = (datetime.datetime(2015, 1, 1) +
-          datetime.timedelta(seconds=(id >> 22) * 1e-3))
-    return (f'<{dt.strftime("%Y-%m-%d/%H:%M:%S.%f")[:-3]}/'
-            f'{((id & 0x3E0000) >> 17) or ""}/{((id & 0x1F000) >> 12) or ""}/'
-            f'{(id & 0xFFF) or ""}>')
+        dt = (datetime.datetime(2015, 1, 1) +
+              datetime.timedelta(seconds=(id >> 22) * 1e-3))
+        return (f'<{dt.strftime("%Y-%m-%d/%H:%M:%S.%f")[:-3]}/'
+                f'{((id & 0x3E0000) >> 17) or ""}/'
+                f'{((id & 0x1F000) >> 12) or ""}/'
+                f'{(id & 0xFFF) or ""}>')
