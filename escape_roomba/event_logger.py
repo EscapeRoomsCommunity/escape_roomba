@@ -141,7 +141,8 @@ class EventLogger:
 
     def _format(self, g=None, c=None, u=None, m=None):
         """Pretty-print Guild (or ID), (Guild/Private)Channel (or ID),
-        and/or Message (or ID) for some object."""
+        User/Member (or ID), and/or Message (or ID) for some object.
+        Returns a string formatted for debug output."""
 
         # Look up raw IDs, if possible.
         if isinstance(g, int):
