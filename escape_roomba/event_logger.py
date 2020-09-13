@@ -4,6 +4,7 @@ import logging
 import discord
 import discord.abc
 
+
 class EventLogger:
     """Discord event listener that logs server/connection events."""
 
@@ -62,107 +63,148 @@ class EventLogger:
     #
 
     async def debug_on_message(self, m):
-        self.debug(f'Post "{m.author.guild}" #{m.channel} ({m.author}):\n'
-                   f'    "{m.content.strip()}"')
+        self.debug(f'Post message\n    {self._format(m=m)}')
 
     async def debug_on_message_delete(self, m):
-        self.debug(f'Delete "{m.author.guild}" #{m.channel} ({m.author}):\n'
-                   f'    "{m.content.strip()}"')
+        self.debug(f'Delete message\n    {self._format(m=m)}')
 
-    async def debug_on_bulk_message_delete(self, messages):
-        self.debug(f'Bulk delete {len(messages)}x:')
-        for m in messages:
-            self.debug(f'    "{m.author.guild}" #{m.channel} ({m.author}):\n'
-                       f'        "{m.content.strip()}"')
+    async def debug_on_bulk_message_delete(self, ms):
+        self.debug(f'Delete {len(ms)} messages:\n' +
+                   '\n'.join(f'    {self._format(m=m)}' for m in ms))
 
     async def debug_on_raw_message_delete(self, p):
-        self.debug(f'Raw delete {self._guild(p.guild_id)} '
-                   f'{self._channel(p.channel_id)}:\n    {_id(p.message_id)}')
+        self.debug(f'Raw delete message\n    ' +
+                   self._format(g=p.guild_id, c=p.channel_id, m=p.message_id))
 
     async def debug_on_raw_bulk_message_delete(self, p):
         self.debug(
-            f'Raw bulk delete {len(p.message_ids)}x '
-            f'{self._guild(p.guild_id)} {self._channel(p.channel_id)}:\n' +
-            '\n'.join(f'    {_id(id)}' for id in p.message_ids))
+            f'Raw delete {len(p.message_ids)} messages in '
+            f'{self._format(g=p.guild_id, c=p.channel_id)}:\n'
+            '\n'.join(f'    {self._format(m=m)}' for m in p.message_ids))
 
     async def debug_on_message_edit(self, b, a):
-        self.debug(f'Edit "{b.author.guild}" #{b.channel} ({b.author}):\n'
-                   f'    before: "{b.content.strip()}"\n'
-                   f'    after:  "{a.content.strip()}"')
+        self.debug('Edit message\n'
+                   f'    was: {self._format(m=b)}\n'
+                   f'    now: {self._format(m=a)}')
 
     async def debug_on_raw_message_edit(self, p):
-        self.debug(f'Raw edit {self._channel(p.channel_id)}:\n'
-                   f'    {_id(p.message_id)}')
+        self.debug('Raw edit message\n    ' +
+                   self._format(c=p.channel_id, m=p.message_id))
 
-    async def debug_on_reaction_add(self, reaction, user):
-        self.debug(f'Reaction add: {reaction} by {user}')
+    async def debug_on_reaction_add(self, r, u):
+        self.debug(f'Add [{r.emoji}] {self._format(u=u)} on\n    ' +
+                   self._format(m=r.message))
 
-    async def debug_on_raw_reaction_add(self, payload):
-        self.debug(f'Raw reaction add: {payload}')
+    async def debug_on_raw_reaction_add(self, p):
+        self.debug(f'Raw add [{p.emoji}] {self._format(u=p.user_id)} on\n'
+                   f'    ' +
+                   self._format(g=p.guild_id, c=p.channel_id, m=p.message_id))
 
-    async def debug_on_reaction_remove(self, reaction, user):
-        self.debug(f'Reaction remove: {reaction} by {user}')
+    async def debug_on_reaction_remove(self, r, u):
+        self.debug(f'Remove [{r.emoji}] {self._format(u=u)} on\n    ' +
+                   self._format(m=r.message))
 
-    async def debug_on_raw_reaction_remove(self, payload):
-        self.debug(f'Raw reaction remove: {payload}')
+    async def debug_on_raw_reaction_remove(self, p):
+        self.debug(f'Raw remove [{p.emoji}] {self._format(u=p.user_id)} on\n'
+                   f'    ' +
+                   self._format(g=p.guild_id, c=p.channel_id, m=p.message_id))
 
-    async def debug_on_reaction_clear(self, message, reactions):
-        self.debug(f'Reaction clear: {message} {reactions}')
+    async def debug_on_reaction_clear(self, m, rs):
+        self.debug(f'Clear {len(rs)} reactions from\n    {self._format(m=m)}:' +
+                   '\n'.join(f'    {r.count}x {r.emoji}' for r in rs))
 
-    async def debug_on_raw_reaction_clear(self, payload):
-        self.debug(f'Raw reaction clear: {payload}')
+    async def debug_on_raw_reaction_clear(self, p):
+        self.debug(f'Raw clear reactions from\n    ' +
+                   self._format(g=p.guild_id, c=p.channel_id, m=p.message_id))
 
-    async def debug_on_reaction_clear_emoji(self, message, reactions):
-        self.debug(f'Reaction emoji clear: {message} {reactions}')
+    async def debug_on_reaction_clear_emoji(self, r):
+        self.debug(f'Clear [{r.emoji}] from\n    {self._format(m=r.message)}')
 
-    async def debug_on_raw_reaction_clear_emoji(self, payload):
-        self.debug(f'Raw reaction emoji clear: {payload}')
+    async def debug_on_raw_reaction_clear_emoji(self, p):
+        self.debug(f'Raw clear [{p.emoji}] from\n    ' +
+                   self._format(g=p.guild_id, c=p.channel_id, m=p.message_id))
 
-    async def debug_on_guild_channel_delete(self, channel):
-        self.debug(f'Guild (server) text channel delete: {channel}')
+    async def debug_on_guild_channel_delete(self, c):
+        self.debug(f'Channel delete {self._format(c=c)}')
 
-    async def debug_on_guild_channel_create(self, channel):
-        self.debug(f'Guild (server) text channel create: {channel}')
+    async def debug_on_guild_channel_create(self, c):
+        self.debug(f'Channel create {self._format(c=c)}')
 
-    async def debug_on_guild_channel_update(self, before, after):
-        self.debug(f'Guild (server) text channel update: {before} => {after}')
+    async def debug_on_guild_channel_update(self, b, a):
+        self.debug(f'Channel update {self._format(c=b)}')
 
-    async def debug_on_guild_available(self, guild):
-        self.debug(f'Guild (server) available: {guild}')
+    async def debug_on_guild_available(self, g):
+        self.debug(f'Server available {self._format(g=g)}')
 
-    async def debug_on_guild_unavailable(self, guild):
-        self.debug(f'Guild (server) UNavailable: {guild}')
+    async def debug_on_guild_unavailable(self, g):
+        self.debug(f'Server UN-available {self._format(g=g)}')
 
-    def _guild(self, g):
-        """Pretty-print a Guild or guild ID."""
-        if isinstance(g, discord.Guild): return f'"{g}"'
-        if isinstance(g, discord.abc.Snowflake): g = g.id
+    def _format(self, g=None, c=None, u=None, m=None):
+        """Pretty-print Guild (or ID), (Guild/Private)Channel (or ID),
+        and/or Message (or ID) for some object."""
+
+        # Look up raw IDs, if possible.
         if isinstance(g, int):
-            lookup = self.context.client.get_guild(g)
-            if lookup: return f'"{lookup}"'
-            return _id(c)
-        return f'"{g}"'
-
-    def _channel(self, c):
-        """Pretty-print a (Guild/Private)Channel or channel ID."""
-        if isinstance(c, discord.abc.GuildChannel): return f'#{c}'
-        if isinstance(c, discord.abc.PrivateChannel): return f'#{c}'
-        if isinstance(c, discord.abc.Snowflake): c = c.id
+            g = self.context.client.get_guild(g) or g
         if isinstance(c, int):
-            lookup = self.context.client.get_channel(c)
-            if lookup: return f'#{lookup}'
-            return _id(c)
-        return f'#{c}'
+            c = self.context.client.get_channel(c) or c
+        if isinstance(u, int):
+            u = self.context.client.get_user(u) or u
+
+        # Get embedded values from objects, if present.
+        if isinstance(m, discord.Message):
+            g = m.guild or g
+            c = m.channel or c
+            u = m.author or u
+        if isinstance(u, discord.Member):
+            g = u.guild or g
+        if isinstance(c, discord.abc.GuildChannel):
+            g = c.guild or g
+
+        # Accumulate output that will be assembled with spaces.
+        # The final format will be part or all of this:
+        #    "guild" #channel (user#1234) "message text"
+        out = []
+
+        if isinstance(g, discord.Guild):
+            out.append(f'"{g}"')
+        elif g:
+            out.append(f'g={format_id(g)}')
+
+        if isinstance(c, discord.abc.GuildChannel):
+            out.append(f'#{c}')
+        elif isinstance(c, discord.abc.PrivateChannel):
+            out.append(f'PRIVATE #{c}')
+        elif c:
+            out.append(f'c={format_id(c)}')
+
+        if isinstance(u, discord.Member) or isinstance(u, discord.User):
+            out.append(f'({u})')
+        elif u:
+            out.append(f'u={format_id(u)}')
+
+        if isinstance(m, discord.Message):
+            text = ' '.join(m.content.split())
+            if len(text) > 20:
+                text = text[:20].strip() + ' ...'
+            if out: out[-1] = out[-1] + ':'
+            out.append(f'"{text}"')
+        elif m:
+            out.append(f'm={format_id(m)}')
+
+        return ' '.join(out) if out else '(None)'
 
 
-def _id(id):
+def format_id(id):
     """Pretty-print a "snowflake" ID value (see
     https://discordpy.readthedocs.io/en/latest/api.html#discord.abc.Snowflake,
     https://discord.com/developers/docs/reference#snowflakes,
     https://github.com/twitter-archive/snowflake/tree/snowflake-2010)."""
 
-    if isinstance(id, discord.abc.Snowflake): id = id.id
-    if isinstance(id, str): id = int(id)
+    if isinstance(id, discord.abc.Snowflake):
+        id = id.id
+    if not isinstance(id, int):
+        return f'?{repr(id)}?'  # Unknown type!
 
     dt = (datetime.datetime(2015, 1, 1) +
           datetime.timedelta(seconds=(id >> 22) * 1e-3))
