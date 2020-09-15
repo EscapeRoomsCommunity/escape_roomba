@@ -31,14 +31,16 @@ def main():
     logging.getLogger('discord').setLevel(
         logging.DEBUG if args.debug_discord else logging.WARNING)
     logging.captureWarnings(True)
+    bot_logger = logging.getLogger('bot')
 
     try:
         bot_token = os.environ['ESCAPE_ROOMBA_BOT_TOKEN']
     except KeyError as e:
-        logging.critical(f'*** No ${e.args[0]}! See README.md.')
+        bot_logger.critical(f'*** No ${e.args[0]}! See README.md.')
         return 1
 
-    context = escape_roomba.context.Context(
-        client=discord.Client(), logger=logging.getLogger('bot'))
+    context = escape_roomba.context.Context()
+    context.logger = bot_logger
+    context.client = discord.Client()
     escape_roomba.event_logger.EventLogger(context)
     context.client.run(bot_token)
