@@ -60,7 +60,7 @@ class HistoryBuffer:
     async def _on_ready(self):
         # Load existing channels at startup.
         await asyncio.gather(
-            *[self._on_guild_join(g) for g in self.context.client.guilds])
+            *[self._on_guild_join(g) for g in self._context.client.guilds])
 
     async def _on_guild_join(self, guild):
         await asyncio.gather(

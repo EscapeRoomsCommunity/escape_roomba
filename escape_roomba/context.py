@@ -65,7 +65,7 @@ class Context:
                 event_name = f'on_{attr_name[len(prefix):]}'
                 self.add_listener(event_name, getattr(obj, attr_name))
 
-    async def async_internal_event(self, event_name, *args, **kwargs):
+    async def async_generate_event(self, event_name, *args, **kwargs):
         """Coroutine that sends an event to all registered listeners. The event
         may be a standard Discord event or a locally invented event name.
 

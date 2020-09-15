@@ -21,7 +21,7 @@ class EventLogger:
             context.add_listener_methods(self, prefix='_debug_on_')
 
     #
-    # Logging handlers for 'notable' message types.
+    # Logging listeners for 'notable' message types.
     #
 
     async def _on_connect(self):
@@ -61,7 +61,7 @@ class EventLogger:
         self._context.logger.exception(f'Exception in "{event}" handler:')
 
     #
-    # Debug-only logging for all message types.
+    # Debug-only logging listeners for all message types.
     #
 
     async def _debug_on_message(self, m):
