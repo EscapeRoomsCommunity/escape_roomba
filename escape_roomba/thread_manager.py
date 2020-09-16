@@ -1,127 +1,325 @@
 import asyncio
 import collections
 import discord
+import logging
+import re
 
 from dataclasses import dataclass
-from types import Optional
+from typing import Optional
+
+from escape_roomba.format_util import fid
+
+
+# TODO:
+# - put a card at the top of new thread channels
+# - manage visibility of thread channels (origin author + people who react?)
+# - allow people to drop out of a thread channel (emoji on top card?)
+# - allow specifying where people can/can't create threads?
+# - let people set thread channel name & topic (commands start with emoji?)
+# - archive thread channels once inactive for a while
+# - handle orphaned threads (post something and edit the top card?)
+# - maybe use emoji to indicate number/recency of messages in thread???
 
 
 class ThreadManager:
-    THREAD_EMOJI = '🧵'
+    """Allows users to spawn thread channels by adding a 🧵 reaction.
 
-    @dataclass 
+    When a 🧵 is reaction is added to any text channel message, a new thread
+    channel is created, initially named "#🧵" plus the first few words of the
+    origin message, added to the end of the original message's category.
+
+    The origin message channel/message ID are added to the thread channel's
+    topic, allowing them to be reassociated if the bot restart.
+    """
+
+    _THREAD_EMOJI = '🧵'  # Reaction emoji trigger, and channel prefix.
+    _ELLIPSIS = '…'  # Used at the end of thread channel names.
+
+    # Used to extract channel/message ID from existing thread channel topics.
+    _TOPIC_REGEX = re.compile(r'.*\[id=([0-9a-f]*)/([0-9a-f]*)\] *', re.I)
+
+    @dataclass
     class _Thread:
-        guild: discord.Guild
-        origin_channel_id: Optional[int]
-        origin_message_id: Optional[int]
-        thread_channel_id: Optional[int]
+        """Tracks a created thread channel, and its origin message."""
+        thread_channel: discord.TextChannel
+        origin_channel_id: int
+        origin_message_id: int
 
     def __init__(self, context):
         self._context = context
+        self._logger = context.logger.getChild('thread')
 
-        # {(origin_channel_id, origin_message_id): _Thread}
-        self._thread_by_origin = {}
+        # _Thread objects are indexed by origin message *and* thread channel.
+        self._thread_by_origin = {}   # {orig_chan_id: {orig_msg_id: _Thread}}
+        self._thread_by_channel = {}  # {thread_channel.id: _Thread}
 
-        # {thread_channel_id: _Thread}
-        self._thread_by_channel = {}
-
-        # {(channel_id, message_id): asyncio.Lock} for serializing fetches
-        self._lock_by_message = collections.defaultdict(asyncio.Lock)
+        # Used to serialize message processing; see _async_maybe_update.
+        self._update_done_event = {}   # {(chan_id, msg_id): asyncio.Event}
 
         context.add_listener_methods(self)
 
     #
-    # Discord event listeners
+    # Discord listeners (prefer "raw" to avoid depending on cache lifetime)
+    # Message events don't trigger actions (eg. creating a thread) directly,
+    # but call _async_maybe_update() to ensure ordered processing.
     #
 
     async def _on_ready(self):
+        # Forget everything from previous connections and re-sync.
+        self._thread_by_origin = {}
+        self._thread_by_channel = {}
+
+        # On startup, initialize the guilds we're already joined to.
         await asyncio.gather(
             *[self._on_guild_join(g) for g in self._context.client.guilds])
 
     async def _on_guild_join(self, guild):
-        for channel in guild.channels:
-            self._check_channel(channel)
+        # For a new guild, scan all channels and recent channel history.
+        # (Scan existing channels first to avoid double-creation!)
         await asyncio.gather(
-            *[self._async_check_history(c) for c in guild.channels])
+            *[self._async_check_channel(channel=c) for c in guild.channels])
+        await asyncio.gather(
+            *[self._async_fetch_history(channel=c) for c in guild.channels])
 
     async def _on_guild_remove(self, guild):
-        for c in guild.channels:
-            self._remove_channel(c)
+        # Remove _Thread objects on departure (avoid confusion when rejoining).
+        await asyncio.gather(
+            *[self._async_forget_channel(channel=c) for c in guild.channels])
 
     async def _on_message(self, message):
-        pass
+        await self._async_maybe_update(channel=message.channel,
+                                       message=message)
 
-    async def _on_raw_message_delete(self, payload):
-        pass
+    async def _on_raw_message_delete(self, p):
+        await self._async_maybe_update(
+            channel_id=p.channel_id, message_id=p.message_id)
 
-    async def _on_raw_bulk_message_delete(self, payload):
-        pass
+    async def _on_raw_bulk_message_delete(self, p):
+        for mi in p.message_ids:
+            await self._async_maybe_update(
+                channel_id=p.channel_id, message_id=mi)
 
-    async def _on_raw_message_edit(self, payload):
-        pass
+    async def _on_raw_message_edit(self, p):
+        await self._async_maybe_update(
+            channel_id=p.channel_id, message_id=p.message_id)
 
-    async def _on_raw_reaction_add(self, payload):
-        pass
+    async def _on_raw_reaction_add(self, p):
+        # Don't react to our own emoji reactions (superfluous).
+        if p.user_id != self._context.client.user.id:
+            await self._async_maybe_update(
+                channel_id=p.channel_id, message_id=p.message_id,
+                emoji=p.emoji)
 
-    async def _on_raw_reaction_remove(self, payload):
-        pass
+    async def _on_raw_reaction_remove(self, p):
+        # Don't react to our own emoji reactions (superfluous).
+        if p.user_id != self._context.client.user.id:
+            await self._async_maybe_update(
+                channel_id=p.channel_id, message_id=p.message_id,
+                emoji=p.emoji)
 
-    async def _on_raw_reaction_clear(self, payload):
-        pass
+    async def _on_raw_reaction_clear(self, p):
+        await self._async_maybe_update(
+            channel_id=p.channel_id, message_id=p.message_id)
 
     async def _on_raw_reaction_clear_emoji(self, payload):
-        pass
+        await self._async_update_message(
+            channel_id=p.channel_id, message_id=p.message_id, emoji=p.emoji)
 
     async def _on_guild_channel_delete(self, channel):
-        self._remove_channel(channel)
+        # Take note when a thread channel is deleted.
+        await self._async_forget_channel(channel)
 
     async def _on_guild_channel_create(self, channel):
-        self._check_channel(channel)
-        await self._async_check_history(channel)
+        # Check if a new channel is a thread channel.
+        await self._async_check_channel(channel)
+        await self._async_fetch_history(channel=channel)
 
     async def _on_guild_channel_update(self, channel):
-        self._check_channel(channel)
+        # Check if a modified channel is a thread channel.
+        await self._async_check_channel(channel)
 
     #
     # Internal methods
     #
 
-    def _check_channel(self, channel):
-        pass
+    async def _async_maybe_update(self, channel_id=None, channel=None,
+                                  message=None, message_id=None, emoji=None):
+        """Responds to an indication of message change; if the change is
+        relevant, fetches and processes the message's latest version.
+        One each of channel_id/channel and message_id/message must be non-None.
 
-    def _remove_channel(self, channel):
-        pass
+        Args:
+            channel_id: int - ID of channel containing message *OR*
+            channel: discord.TextChannel - channel object containing message
+            message_id: int - ID of message to fetch and process *OR*
+            message: discord.Message - contents of updated message
+            emoji: str, discord.*Emoji - emoji of reaction change (or None)
+        """
 
-    async def _async_fetch_and_check_history(self, channel):
-        await self._async_check_channel(channel)
-        async for message in channel.history(limit=100, oldest_first=False):
-            if any(str(m.emoji) == THREAD_EMOJI for m in message.reactions):
-                self._async_fetch_and_check_message(channel, message)
+        # Handle various ways channel and message can be supplied
+        ci = channel_id or channel.id
+        mi = message_id or message.id
 
-    async def _async_fetch_and_check_message(self, channel_or_id, message_or_id):
-        channel = (self._context.client.get_channel(channel_or_id)
-                   if isinstance(channel_or_id, int) else channel_or_id)
-        message_id = getattr(message, 'id', None) or message_id
-        if channel is None or message_id is None:
+        # Skip irrelevant changes; a change is "relevant" if:
+        # - there is an existing fetch in progress for the message OR
+        # - the message is an existing thread channel origin OR
+        # - the message has a thread emoji reaction OR
+        # - there was a change to thread emoji reactions
+        if ((ci, mi) not in self._update_done_event and
+            mi not in self._thread_by_origin.get(ci, {}) and
+            (emoji is None or str(emoji) != self._THREAD_EMOJI) and
+            (message is None or
+             all(str(r) != self._THREAD_EMOJI for r in message.reactions))):
             return
 
-        # Wait our turn to fetch and process this message
-        # (to avoid race conditions with overlapping fetch operations).
-        key = (channel.id, message_id)
-        last_fetch_done = self._fetch_done_event.get(key)
-        this_fetch_done = self._fetch_done_event[key] = asyncio.Event()
-        if last_fetch_done:
-            await last_fetch_done.wait()
+        # To avoid race conditions with asynchronous message fetch requests,
+        # serialize update operations on the same message, using an Event map.
+        # (Per-message Locks would be simpler, but could never be removed.)
+        last_update_done = self._update_done_event.get((ci, mi))
+        this_update_done = self._update_done_event[(ci, mi)] = asyncio.Event()
+        if last_update_done is not None:
+            await last_update_done.wait()
 
-        message = await channel.fetch_message(message_id)
-        self._check_message(message)
-        # TODO process message !!
-
-        # Activate the next waiting fetch (if any).
-        if self._fetch_done_event.get(key) is not this_fetch_done:
-            this_fetch_done.set()
+        channel = channel or self._context.client.get_channel(channel_id)
+        if channel:
+            self._logger.debug(f'Fetch m=%s ...', fid(mi))
+            try:
+                fetched_message = await channel.fetch_message(mi)
+                await self._async_process_message(fetched_message)
+            except discord.errors.NotFound:
+                self._logger.debug('Fetch m=%s: Gone', fid(mi))
+                await self._async_message_gone(channel_id=ci, message_id=mi)
         else:
-            del self._fetch_in_progress[key]
+            # No channel available, treat the message as missing.
+            self._logger.debug('Fetch m=%s: !Chan', fid(mi))
+            await self._async_message_gone(channel_id=ci, message_id=mi)
 
-    def _check_message(self, message):
-        process
+        # Trigger the next update that's waiting, if any.
+        if self._update_done_event.get((ci, mi)) is not this_update_done:
+            this_update_done.set()  # Someone else is waiting; let them run.
+        else:
+            del self._update_done_event[(ci, mi)]  # Nobody waiting; all clear.
+
+    async def _async_process_message(self, message):
+        """Examines the state of a message of interest.
+        Called by _async_update_message with serialization enforced."""
+
+        ci, mi, rs = message.channel.id, message.id, message.reactions
+        thread = self._thread_by_origin.get(ci, {}).get(mi)
+        r = next((r for r in rs if str(r.emoji) == self._THREAD_EMOJI), None)
+
+        if self._logger.isEnabledFor(logging.DEBUG):
+            tid = thread.thread_channel.id if thread else None
+            rt = f'x{r.count}{" w/me" if r.me else ""}' if r else 'None'
+            self._logger.debug(
+                f'Check m={fid(mi)}:\n'
+                f'    reaction={rt} existing={fid(tid) if tid else "None"}')
+
+        # If there is no existing thread channel and we have not already piled
+        # on to the thread emoji, create a new channel (and pile on the emoji).
+        if r is not None and r.count > 0 and not r.me:
+            if thread is None:
+                await self._async_create_thread_channel(message)
+            await message.add_reaction(r)  # Only after creation.
+
+    async def _async_create_thread_channel(self, message):
+        """Creates a new thread channel based on an origin message thas
+        someone has just added a thread emoji reaction to."""
+
+        first_words = ''
+        for match in re.finditer(r'\w+', message.content):
+            word, dash = match.group(), ('-' if first_words else '')
+            remaining = 20 - len(first_words) - len(dash) - len(word)
+            if remaining >= 0:
+                first_words += f'{dash}{word}'
+                continue
+            if len(first_words) < 10:
+                first_words += f'{dash}{word[:remaining]}'
+            first_words += self._ELLIPSIS
+            break
+
+        ci, mi = message.channel.id, message.id
+        name = f'{self._THREAD_EMOJI}{first_words}'
+        topic = f'[id={ci:x}/{mi:x}]'
+        if self._logger.isEnabledFor(logging.DEBUG):
+            self._logger.debug(f'Creating #{name}:\n'
+                               f'    oc={fid(ci)} om={fid(mi)}\n'
+                               f'    topic="{topic}"')
+
+        channel = await message.guild.create_text_channel(
+            name=name, category=message.channel.category,
+            position=len(message.guild.channels), topic=topic,
+            reason='Thread creation')
+
+        t = self._Thread(origin_channel_id=ci, origin_message_id=mi,
+                         thread_channel=channel)
+        self._thread_by_origin.setdefault(ci, {})[mi] = t
+        self._thread_by_channel[channel.id] = t
+
+    async def _async_message_gone(self, channel_id, message_id):
+        """Handles a message that was deleted."""
+
+        t = self._thread_by_origin.setdefault(channel_id, {}).get(message_id)
+        if t is not None:
+            pass  # TODO mark thread as orphaned?
+
+    async def _async_fetch_history(self, channel):
+        """Fetches and examines the recent history of a channel that appeared
+        (startup, server join, channel creation, visibility change)."""
+
+        if channel.type != discord.ChannelType.text:
+            return
+
+        # Go through the history and trigger updates for unprocessed messages;
+        # skip anything we already made a channel for (no need to re-update).
+        await asyncio.gather(*[
+            self._async_maybe_update(channel=channel, message=m)
+            async for m in channel.history(limit=100, oldest_first=False)
+            if m.id not in self._thread_by_origin.get(channel.id, {})])
+
+    async def _async_check_channel(self, channel):
+        """Examines a channel; add existing thread channels to tracking."""
+
+        if channel.type != discord.ChannelType.text:
+            return
+
+        # Deindex any existing _Thread object for this thread channel ID.
+        old_t = self._thread_by_channel.pop(channel.id, None)
+        if old_t is not None:
+            old_ci, old_mi = old_t.origin_channel_id, old_t.origin_message_id
+            del self._thread_by_origin[old_ci][old_mi]
+
+        # If this is a thread channel, create and index the _Thread.
+        topic_match = self._TOPIC_REGEX.match(channel.topic or '')
+        if topic_match and channel.name.startswith(self._THREAD_EMOJI):
+            ci, mi = (int(g, 16) for g in topic_match.groups())
+            t = self._Thread(
+                origin_channel_id=ci, origin_message_id=mi,
+                thread_channel=channel)
+            self._thread_by_origin.setdefault(ci, {})[mi] = t
+            self._thread_by_channel[channel.id] = t
+
+            if not old_t or (ci, mi) != (old_ci, old_mi):
+                if self._logger.isEnabledFor(logging.DEBUG):
+                    self._logger.debug(f'Found #{channel.name}:\n'
+                                       f'    oc={fid(ci)} om={fid(mi)}\n'
+                                       f'    tc={fid(channel.id)}\n'
+                                       f'    topic="{channel.topic}"')
+
+                # For a new channel, update the origin message.
+                # TODO - avoid redundancy if we just created the thread?
+                await self._async_maybe_update(channel_id=ci, message_id=mi)
+
+    async def _async_forget_channel(self, channel):
+        """Handles a channel that is no longer visible (server detach,
+        channel deleted, visibility change)."""
+
+        # If it was a thread channel, remove it from tracking.
+        t = self._thread_by_channel.pop(channel.id, None)
+        if t is not None:
+            ci, mi = t.origin_channel_id, t.origin_message_id
+            del self._thread_by_origin[ci][mi]
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug(f'Removed #{channel.name}:\n'
+                                   f'    oc={fid(ci)} om={fid(mi)}\n'
+                                   f'    tc={fid(channel.id)}')

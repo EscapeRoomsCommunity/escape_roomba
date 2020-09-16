@@ -13,6 +13,7 @@ import discord
 
 import escape_roomba.context
 import escape_roomba.event_logger
+import escape_roomba.thread_manager
 
 
 def main():
@@ -41,6 +42,10 @@ def main():
 
     context = escape_roomba.context.Context()
     context.logger = bot_logger
-    context.client = discord.Client()
+    context.client = discord.Client(
+        max_messages=None,            # We do our own caching.
+        fetch_offline_members=False,  # No need for offline members.
+        guild_subscriptions=False)    # No need for presence/typing messages.
     escape_roomba.event_logger.EventLogger(context)
+    escape_roomba.thread_manager.ThreadManager(context)
     context.client.run(bot_token)

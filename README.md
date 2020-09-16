@@ -59,7 +59,7 @@ able to start `run_bot`, which should log an invite URL at startup:
     wss://gateway.discord.gg?encoding=json&v=6&compress=zlib-stream
 09-11 11:51:19 root [INFO] Ready in 1 servers (as Jaxlyn's Test Bot#1234):
     Jaxlyn's Test Server
-09-11 11:51:19 root [INFO] Invite link, open in browser to add servers:
+09-11 11:51:19 root [INFO] Open this link to add this bot to more servers:
     https://discord.com/oauth2/authorize?client_id=753465244491317259&scope=bot&permissions=268512336
 ```
 
