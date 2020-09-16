@@ -64,21 +64,3 @@ class Context:
             if attr_name.startswith(prefix):
                 event_name = f'on_{attr_name[len(prefix):]}'
                 self.add_listener(event_name, getattr(obj, attr_name))
-
-    async def async_generate_event(self, event_name, *args, **kwargs):
-        """Coroutine that sends an event to all registered listeners. The event
-        may be a standard Discord event or a locally invented event name.
-
-        Args:
-            event_name: str - Discord event (eg. "on_message") or invented name
-            args, kwargs - event arguments passed to listener coroutines
-        """
-
-        # Argument validation.
-        if not event_name.startswith('on_'):
-            raise ValueError(f'event "{event_name}" doesn\'t start with "on_"')
-
-        # Call the client's listener function, if present.
-        listener = getattr(self.client, event_name, None)
-        if listener:
-            await listener(*args, **kwargs)
