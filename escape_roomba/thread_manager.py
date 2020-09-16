@@ -48,13 +48,14 @@ class ThreadManager:
     def __init__(self, context):
         self._context = context
         self._logger = context.logger.getChild('thread')
+        self._loop = asyncio.get_event_loop()
 
         # _Thread objects are indexed by origin message *and* thread channel.
         self._thread_by_origin = {}   # {orig_chan_id: {orig_msg_id: _Thread}}
         self._thread_by_channel = {}  # {thread_channel.id: _Thread}
 
         # Used to serialize message processing; see _async_maybe_update.
-        self._update_done_event = {}   # {(chan_id, msg_id): asyncio.Event}
+        self._update_done = {}   # {(chan_id, msg_id): asyncio.Future}
 
         context.add_listener_methods(self)
 
@@ -165,7 +166,7 @@ class ThreadManager:
         # - the message is an existing thread channel origin OR
         # - the message has a thread emoji reaction OR
         # - there was a change to thread emoji reactions
-        if ((ci, mi) not in self._update_done_event and
+        if ((ci, mi) not in self._update_done and
             mi not in self._thread_by_origin.get(ci, {}) and
             (emoji is None or str(emoji) != self._THREAD_EMOJI) and
             (message is None or
@@ -173,12 +174,13 @@ class ThreadManager:
             return
 
         # To avoid race conditions with asynchronous message fetch requests,
-        # serialize update operations on the same message, using an Event map.
-        # (Per-message Locks would be simpler, but could never be removed.)
-        last_update_done = self._update_done_event.get((ci, mi))
-        this_update_done = self._update_done_event[(ci, mi)] = asyncio.Event()
+        # serialize update operations, using a per-message-ID map of Futures.
+        # (Per-message Locks would be easier, but would accumulate over time.)
+        last_update_done = self._update_done.get((ci, mi))
+        this_update_done = self._loop.create_future()
+        self._update_done[(ci, mi)] = this_update_done
         if last_update_done is not None:
-            await last_update_done.wait()
+            await last_update_done
 
         channel = channel or self._context.client.get_channel(channel_id)
         if channel:
@@ -194,11 +196,11 @@ class ThreadManager:
             self._logger.debug('Fetch m=%s: !Chan', fid(mi))
             await self._async_message_gone(channel_id=ci, message_id=mi)
 
-        # Trigger the next update that's waiting, if any.
-        if self._update_done_event.get((ci, mi)) is not this_update_done:
-            this_update_done.set()  # Someone else is waiting; let them run.
+        # If another fetch is waiting to run, let it go.
+        if self._update_done.get((ci, mi)) is not this_update_done:
+            this_update_done.set_result(True)  # Let the next fetch run.
         else:
-            del self._update_done_event[(ci, mi)]  # Nobody waiting; all clear.
+            del self._update_done[(ci, mi)]  # Nobody waiting; all clear.
 
     async def _async_process_message(self, message):
         """Examines the state of a message of interest.
