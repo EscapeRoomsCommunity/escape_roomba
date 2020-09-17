@@ -6,7 +6,7 @@ class Context:
     """Global data shared by bot subfunctions.
 
     Attributes:
-        logger: logging.Logger for general reporting
+        logger: logging.Logger - for general reporting
         client: discord.Client - access to the Discord API
     """
 
@@ -32,9 +32,9 @@ class Context:
 
         # Argument validation. (Alas, discord.py can't check event names!)
         if not event_name.startswith('on_'):
-            raise ValueError(f'event "{event_name}" doesn\'t start with "on_"')
+            raise ValueError(f"event '{event_name}' doesn't start with 'on_'")
         if not inspect.iscoroutinefunction(listener):
-            raise TypeError(f'{listener} for "{event_name}" isn\'t async')
+            raise TypeError(f"{listener} for '{event_name}' isn't async")
 
         # For the first listener, register a callback to run the listener list.
         listeners = self._event_listeners.setdefault(event_name, [])

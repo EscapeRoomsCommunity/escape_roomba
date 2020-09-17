@@ -19,12 +19,13 @@ from escape_roomba.format_util import fid
 # - archive thread channels once inactive for a while
 # - handle orphaned threads (post something and edit the top card?)
 # - maybe use emoji to indicate number/recency of messages in thread???
+# - ADD TESTS
 
 
 class ThreadManager:
     """Allows users to spawn thread channels by adding a 🧵 reaction.
 
-    When a 🧵 is reaction is added to any text channel message, a new thread
+    When a 🧵 reaction is added to any text channel message, a new thread
     channel is created, initially named "#🧵" plus the first few words of the
     origin message, added to the end of the original message's category.
 
@@ -60,10 +61,14 @@ class ThreadManager:
         context.add_listener_methods(self)
 
     #
-    # Discord listeners (prefer "raw" to avoid depending on cache lifetime)
-    # Message events don't trigger actions (eg. creating a thread) directly,
-    # but call _async_maybe_update() to ensure ordered processing.
+    # Discord event listeners
+    # (https://discordpy.readthedocs.io/en/latest/api.html#event-reference).
     #
+    # This code uses "raw" events to avoid depending on cache coverage,
+    # so updates often require a message fetch to get context. Fetches are
+    # independent and asynchronous; to avoid races that could have out-of-date
+    # data arriving last, all message updates go through _async_maybe_update().
+    # 
 
     async def _on_ready(self):
         # Forget everything from previous connections and re-sync.
@@ -145,9 +150,9 @@ class ThreadManager:
 
     async def _async_maybe_update(self, channel_id=None, channel=None,
                                   message=None, message_id=None, emoji=None):
-        """Responds to an indication of message change; if the change is
-        relevant, fetches and processes the message's latest version.
-        One each of channel_id/channel and message_id/message must be non-None.
+        """If a message update is relevant, fetches and processes its latest
+        version, serializing multiple fetches of the same message.
+        One each of message/message_id and channel/channel_id must be given.
 
         Args:
             channel_id: int - ID of channel containing message *OR*
@@ -173,34 +178,38 @@ class ThreadManager:
              all(str(r) != self._THREAD_EMOJI for r in message.reactions))):
             return
 
-        # To avoid race conditions with asynchronous message fetch requests,
-        # serialize update operations, using a per-message-ID map of Futures.
-        # (Per-message Locks would be easier, but would accumulate over time.)
+        # Serialize with per-message Futures. (Locks would accumulate.)
+        # Fetch operations are implicitly chained; the _update_done map
+        # holds a Future which will be true when all fetches are complete.
+        # Each new fetch captures the existing Future, installs a new Future,
+        # waits for the previous one, performs its fetch, and sets the new one.
         last_update_done = self._update_done.get((ci, mi))
         this_update_done = self._loop.create_future()
         self._update_done[(ci, mi)] = this_update_done
-        if last_update_done is not None:
-            await last_update_done
+        try:
+            if last_update_done is not None:
+                await last_update_done
 
-        channel = channel or self._context.client.get_channel(channel_id)
-        if channel:
-            self._logger.debug(f'Fetch m=%s ...', fid(mi))
-            try:
-                fetched_message = await channel.fetch_message(mi)
-                await self._async_process_message(fetched_message)
-            except discord.errors.NotFound:
-                self._logger.debug('Fetch m=%s: Gone', fid(mi))
+            channel = channel or self._context.client.get_channel(channel_id)
+            if channel:
+                self._logger.debug('Fetch m=%s ...', fid(mi))
+                try:
+                    fetched_message = await channel.fetch_message(mi)
+                    await self._async_process_message(fetched_message)
+                except discord.errors.NotFound:
+                    self._logger.debug('Fetch m=%s: Gone', fid(mi))
+                    await self._async_message_gone(channel_id=ci, message_id=mi)
+            else:
+                # No channel available, treat the message as missing.
+                self._logger.debug('Fetch m=%s: !Chan', fid(mi))
                 await self._async_message_gone(channel_id=ci, message_id=mi)
-        else:
-            # No channel available, treat the message as missing.
-            self._logger.debug('Fetch m=%s: !Chan', fid(mi))
-            await self._async_message_gone(channel_id=ci, message_id=mi)
 
-        # If another fetch is waiting to run, let it go.
-        if self._update_done.get((ci, mi)) is not this_update_done:
-            this_update_done.set_result(True)  # Let the next fetch run.
-        else:
-            del self._update_done[(ci, mi)]  # Nobody waiting; all clear.
+            # If another fetch is waiting to run, let it go.
+            if self._update_done.get((ci, mi)) is this_update_done:
+                del self._update_done[(ci, mi)]  # Nobody took it; OK to del.
+        
+        finally:
+            this_update_done.set_result(True)  # Run the next fetch (if any).
 
     async def _async_process_message(self, message):
         """Examines the state of a message of interest.
@@ -263,7 +272,8 @@ class ThreadManager:
 
         t = self._thread_by_origin.setdefault(channel_id, {}).get(message_id)
         if t is not None:
-            pass  # TODO mark thread as orphaned?
+            # TODO: mark the thread as orphaned (in its intro card?)
+            pass
 
     async def _async_fetch_history(self, channel):
         """Fetches and examines the recent history of a channel that appeared
