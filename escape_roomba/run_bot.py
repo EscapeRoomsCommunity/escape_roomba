@@ -13,6 +13,7 @@ import discord
 
 import escape_roomba.context
 import escape_roomba.event_logger
+import escape_roomba.thread_manager
 
 
 def main():
@@ -31,14 +32,20 @@ def main():
     logging.getLogger('discord').setLevel(
         logging.DEBUG if args.debug_discord else logging.WARNING)
     logging.captureWarnings(True)
+    bot_logger = logging.getLogger('bot')
 
     try:
         bot_token = os.environ['ESCAPE_ROOMBA_BOT_TOKEN']
     except KeyError as e:
-        logging.critical(f'*** No ${e.args[0]}! See README.md.')
+        bot_logger.critical(f'*** No ${e.args[0]}! See README.md.')
         return 1
 
-    context = escape_roomba.context.Context(
-        client=discord.Client(), logger=logging.getLogger('bot'))
+    context = escape_roomba.context.Context()
+    context.logger = bot_logger
+    context.client = discord.Client(
+        max_messages=None,            # We do our own caching.
+        fetch_offline_members=False,  # No need for offline members.
+        guild_subscriptions=False)    # No need for presence/typing messages.
     escape_roomba.event_logger.EventLogger(context)
+    escape_roomba.thread_manager.ThreadManager(context)
     context.client.run(bot_token)

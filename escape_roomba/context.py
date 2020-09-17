@@ -3,27 +3,38 @@ import inspect
 
 
 class Context:
-    """Global data shared by bot subfunctions."""
+    """Global data shared by bot subfunctions.
 
-    def __init__(self, client, logger):
-        self.client = client
-        self.logger = logger
-        self._event_listeners = {}
+    Attributes:
+        logger: logging.Logger - for general reporting
+        client: discord.Client - access to the Discord API
+    """
+
+    def __init__(self):
+        """Creates an empty Context. The caller must populate attributes."""
+        self.logger = None
+        self.client = None
+
+        self._event_listeners = {}  # Used by add_listener() (below).
 
     # discord.Client only dispatches one callback per event type
     # (discordpy.readthedocs.io/en/latest/api.html#discord.Client.event);
     # discord.ext.commands.Bot/.Cog allow multiple subscribers, but also
     # assume a specific UX, so we implement our own simple broadcasting.
-    def add_listener(self, event_name, handler):
+    def add_listener(self, event_name, listener):
         """Registers an async function for a Discord event (like 'on_message').
-        Multiple functions can be registered for the same event name."""
+        Multiple functions can be registered for the same event name.
 
-        # Fail up front if the callback has the wrong type.
-        # (Sadly, discord.Client has no way to verify valid event names!)
+        Args:
+            event_name: str - name of event, like "on_message"
+            listener: coroutine - called on event, with event args
+        """
+
+        # Argument validation. (Alas, discord.py can't check event names!)
         if not event_name.startswith('on_'):
-            raise ValueError(f'event "{event_name}" doesn\'t start with "on_"')
-        if not inspect.iscoroutinefunction(handler):
-            raise ValueError(f'{handler} for "{event_name}" isn\'t async')
+            raise ValueError(f"event '{event_name}' doesn't start with 'on_'")
+        if not inspect.iscoroutinefunction(listener):
+            raise TypeError(f"{listener} for '{event_name}' isn't async")
 
         # For the first listener, register a callback to run the listener list.
         listeners = self._event_listeners.setdefault(event_name, [])
@@ -39,10 +50,15 @@ class Context:
             setattr(self.client, event_name, run)
 
         # Add to the listener list (captured by run() above).
-        listeners.append(handler)
+        listeners.append(listener)
 
-    def add_listener_methods(self, obj, prefix='on_'):
-        """Adds designated object methods (default 'on_*') as listeners."""
+    def add_listener_methods(self, obj, prefix='_on_'):
+        """Adds designated object methods (default '_on_*') as listeners.
+
+        Args:
+            obj - some class object with methods to invoke for events
+            prefix - methods with this prefix will be added as listeners
+        """
 
         for attr_name in dir(obj):
             if attr_name.startswith(prefix):
