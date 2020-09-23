@@ -13,7 +13,7 @@ def fid(id):
     https://discord.com/developers/docs/reference#snowflakes,
     https://github.com/twitter-archive/snowflake/tree/snowflake-2010)."""
 
-    if isinstance(id, discord.abc.Snowflake):
+    if hasattr(id, 'id'):
         id = id.id
     if not isinstance(id, int):
         return f'?{repr(id)}?'  # Unknown type!
@@ -50,37 +50,43 @@ def fobj(client=None, g=None, c=None, u=None, m=None):
         u = client.get_user(u) or u
 
     # Get embedded values from objects, if present.
-    if isinstance(m, discord.Message):
+    if hasattr(m, 'guild'):    # Message-like
         g = m.guild or g
+    if hasattr(m, 'channel'):  # Message-like
         c = m.channel or c
+    if hasattr(m, 'author'):   # Message-like
         u = m.author or u
-    if isinstance(u, discord.Member):
+    if hasattr(u, 'guild'):    # Member-like
         g = u.guild or g
-    if isinstance(c, discord.abc.GuildChannel):
+    if hasattr(c, 'guild'):    # GuildChannel-like
         g = c.guild or g
 
     # Accumulate output that will be assembled with spaces.
     # The final format will be part or all of this:
     out = []
 
-    if isinstance(g, discord.Guild):
-        out.append(f'"{g}"')
+    print(g)
+    if hasattr(g, 'name'):     # Guild-like
+        print(g.name)
+        out.append(f'"{g.name}"')
     elif g:
         out.append(f'g={fid(g)}')
 
-    if isinstance(c, discord.abc.GuildChannel):
-        out.append(f'#{c}')
-    elif isinstance(c, discord.abc.PrivateChannel):
-        out.append(f'PRIVATE #{c}')
+    if hasattr(c, 'me') and hasattr(c, 'recipient'):  # DMChannel-like
+        out.append(f'[{c.me} => {c.recipient}]')
+    elif hasattr(c, 'me') and hasattr(c, 'recipients'):  # GroupChannel-like
+        out.append(f'[{c.me} => {", ".join(r for r in c.recipients)}]')
+    elif hasattr(c, 'name'):  # GuildChannel-like
+        out.append(f'#{c.name}')
     elif c:
         out.append(f'c={fid(c)}')
 
-    if isinstance(u, discord.Member) or isinstance(u, discord.User):
-        out.append(f'({u})')
+    if hasattr(u, 'name') and hasattr(u, 'discriminator'):  # User/Member-like
+        out.append(f'({u.name}#{u.discriminator})')
     elif u:
         out.append(f'u={fid(u)}')
 
-    if isinstance(m, discord.Message):
+    if hasattr(m, 'content'):  # Message-like
         text = ' '.join(m.content.split())
         if len(text) > 20:
             text = text[:20].strip() + ' ...'
