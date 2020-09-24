@@ -65,7 +65,6 @@ def fobj(client=None, g=None, c=None, u=None, m=None):
     # The final format will be part or all of this:
     out = []
 
-    print(g)
     if hasattr(g, 'name'):     # Guild-like
         print(g.name)
         out.append(f'"{g.name}"')
