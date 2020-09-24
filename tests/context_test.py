@@ -8,10 +8,8 @@ from escape_roomba.context import Context
 
 
 @pytest.mark.asyncio
-async def test_add_listener(mocker, event_loop):
-    context = Context()
-    context.logger = logging.getLogger('test')
-    context.client = mocker.Mock()  # No hair needed for this test.
+async def test_add_listener(mocker, make_context):
+    context = make_context()
 
     # Register two listeners on one event (should broadcast).
     foo_listeners = [mocker.AsyncMock(), mocker.AsyncMock()]
@@ -38,10 +36,8 @@ async def test_add_listener(mocker, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_add_listener_methods(mocker, event_loop):
-    context = Context()
-    context.logger = logging.getLogger('test')
-    context.client = mocker.Mock()  # No hair needed for this test.
+async def test_add_listener_methods(mocker, make_context):
+    context = make_context()
 
     # Create and register an object with two "listener" methods.
     listeners = mocker.Mock()
