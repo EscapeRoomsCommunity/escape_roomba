@@ -68,7 +68,7 @@ class ThreadManager:
     # so updates often require a message fetch to get context. Fetches are
     # independent and asynchronous; to avoid races that could have out-of-date
     # data arriving last, all message updates go through _async_maybe_update().
-    # 
+    #
 
     async def _on_ready(self):
         # Forget everything from previous connections and re-sync.
@@ -207,7 +207,7 @@ class ThreadManager:
             # If another fetch is waiting to run, let it go.
             if self._update_done.get((ci, mi)) is this_update_done:
                 del self._update_done[(ci, mi)]  # Nobody took it; OK to del.
-        
+
         finally:
             this_update_done.set_result(True)  # Run the next fetch (if any).
 
@@ -297,21 +297,22 @@ class ThreadManager:
 
         # Deindex any existing _Thread object for this thread channel ID.
         old_t = self._thread_by_channel.pop(channel.id, None)
-        if old_t is not None:
-            old_ci, old_mi = old_t.origin_channel_id, old_t.origin_message_id
+        old_ci = old_t and old_t.origin_channel_id
+        old_mi = old_t and old_t.origin_message_id
+        if old_ci and old_mi:
             del self._thread_by_origin[old_ci][old_mi]
 
         # If this is a thread channel, create and index the _Thread.
         topic_match = self._TOPIC_REGEX.match(channel.topic or '')
         if topic_match and channel.name.startswith(self._THREAD_EMOJI):
             ci, mi = (int(g, 16) for g in topic_match.groups())
-            t = self._Thread(
+            t = old_t if (ci, mi) == (old_ci, old_mi) else self._Thread(
                 origin_channel_id=ci, origin_message_id=mi,
                 thread_channel=channel)
             self._thread_by_origin.setdefault(ci, {})[mi] = t
             self._thread_by_channel[channel.id] = t
 
-            if not old_t or (ci, mi) != (old_ci, old_mi):
+            if t is not old_t:
                 if self._logger.isEnabledFor(logging.DEBUG):
                     self._logger.debug(f'Found #{channel.name}:\n'
                                        f'    oc={fid(ci)} om={fid(mi)}\n'

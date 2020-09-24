@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 
 
 class Context:
@@ -33,7 +32,7 @@ class Context:
         # Argument validation. (Alas, discord.py can't check event names!)
         if not event_name.startswith('on_'):
             raise ValueError(f"event '{event_name}' doesn't start with 'on_'")
-        if not inspect.iscoroutinefunction(listener):
+        if not asyncio.iscoroutinefunction(listener):
             raise TypeError(f"{listener} for '{event_name}' isn't async")
 
         # For the first listener, register a callback to run the listener list.
