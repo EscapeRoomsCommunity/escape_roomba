@@ -64,9 +64,7 @@ def fobj(client=None, g=None, c=None, u=None, m=None):
     # Accumulate output that will be assembled with spaces.
     # The final format will be part or all of this:
     out = []
-
     if hasattr(g, 'name'):     # Guild-like
-        print(g.name)
         out.append(f'"{g.name}"')
     elif g:
         out.append(f'g={fid(g)}')
