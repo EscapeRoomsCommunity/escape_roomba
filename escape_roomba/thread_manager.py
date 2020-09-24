@@ -19,7 +19,6 @@ from escape_roomba.format_util import fid
 # - archive thread channels once inactive for a while
 # - handle orphaned threads (post something and edit the top card?)
 # - maybe use emoji to indicate number/recency of messages in thread???
-# - ADD TESTS
 
 
 class ThreadManager:
@@ -204,7 +203,7 @@ class ThreadManager:
                 self._logger.debug('Fetch m=%s: !Chan', fid(mi))
                 await self._async_message_gone(channel_id=ci, message_id=mi)
 
-            # If another fetch is waiting to run, let it go.
+            # If another fetch is waiting for this message, let it run.
             if self._update_done.get((ci, mi)) is this_update_done:
                 del self._update_done[(ci, mi)]  # Nobody took it; OK to del.
 
