@@ -1,4 +1,6 @@
-"""Shared configuration for unit tests."""
+"""Shared configuration for unit tests:
+docs.pytest.org/en/stable/fixture.html#conftest-py-sharing-fixture-functions.
+"""
 
 import logging
 
