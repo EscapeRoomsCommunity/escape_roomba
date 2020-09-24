@@ -130,7 +130,7 @@ class DiscordMockFixture:
         return message
 
     #
-    # Helper methods to update data in useful ways.
+    # Helper methods to update data and simulate notification events.
     #
 
     def reset_data(self, guild_count=1, members_per_guild=1,
@@ -182,7 +182,7 @@ class DiscordMockFixture:
                     await handler(*args, **kwargs)
 
     def sim_reaction(self, message, unicode, user, delta):
-        """Simulates an emoji reaction changes and queues notification events.
+        """Simulates an emoji reaction change and queues notification events.
 
         Args:
             message - the message object to modify
@@ -192,7 +192,7 @@ class DiscordMockFixture:
         """
 
         if delta not in (-1, +1):
-            raise ValueError('reaction {unicode} delta {delta} not -1 or +1')
+            raise ValueError(f'reaction {unicode} delta {delta} not -1 or +1')
 
         message_reaction = next(
             (r for m in message.reactions if str(r.emoji) == unicode), None)
@@ -208,7 +208,7 @@ class DiscordMockFixture:
             message_reaction.message = message
             message.reactions.append(message_reaction)
         if message_reaction.count + delta < 0:
-            raise ValueError('reaction {unicode} count dropped below 0')
+            raise ValueError(f'reaction {unicode} count dropped below 0')
         if user.id == self.context.client.user.id:
             message_reaction.me = (delta > 0)
         message_reaction.count += delta
@@ -221,9 +221,8 @@ class DiscordMockFixture:
         event.guild_id = message.guild.id
         event.emoji = message_reaction.emoji
         event.member = user
-        event.event_type = f'REACTION_{"ADD" if delta > 0 else "REMOVE"}'
-        self.queue_event(
-            f'on_raw_reaction_{"add" if delta > 0 else "remove"}', event)
+        event.event_type = 'REACTION_ADD' if delta > 0 else 'REACTION_REMOVE'
+        self.queue_event(f'on_raw_{event.event_type.lower()}', event)
         return message_reaction
 
     def sim_create_channel(self, guild, name, category=None,
