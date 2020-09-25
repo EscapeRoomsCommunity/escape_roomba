@@ -240,7 +240,7 @@ class ThreadManager:
         me = self._context.client.user
         if (rx is not None and (rx.count - rx.me) == 0 and
             t is not None and t.intro_messages is not None and
-            not any(m for m in t.intro_messages if m.author != me)):
+                not any(m for m in t.intro_messages if m.author != me)):
             await self._async_delete_locked_thread(t)
             await message.remove_reaction(rx, self._context.client.user)
 
@@ -315,7 +315,7 @@ class ThreadManager:
         t = self._thread_by_origin.setdefault(channel_id, {}).get(message_id)
         me = self._context.client.user  # Skip our own edits.
         if (t is not None and t.intro_messages is not None and
-            not any(m for m in t.intro_messages if m.author != me)):
+                not any(m for m in t.intro_messages if m.author != me)):
             await self._async_delete_locked_thread(t)
         else:
             pass  # TODO: mark the thread as orphaned (in its intro?)
@@ -324,7 +324,7 @@ class ThreadManager:
         """Examines channel metadata; registers existing thread channels."""
 
         if (channel.type != discord.ChannelType.text or
-            not channel.name.startswith(self._THREAD_EMOJI)):
+                not channel.name.startswith(self._THREAD_EMOJI)):
             return  # Not the channel type or name used for thread channels.
 
         topic_match = self._TOPIC_REGEX.match(channel.topic or '')
@@ -355,18 +355,18 @@ class ThreadManager:
         if self._thread_by_channel.get(thread.thread_channel.id) is not thread:
             return  # Thread was removed at some point.
 
+        old_len = len(thread.intro_messages or [])
         thread.intro_messages = [
             m async for m in thread.thread_channel.history(
                 limit=self._FETCH_INTRO, oldest_first=True)]
         if self._logger.isEnabledFor(logging.DEBUG):
-            messages = thread.intro_messages
-            if messages:
-                self._logger.debug(
-                    f'Fetched thread intro ({len(messages)}m):' +
-                    ''.join(f'\n    {fobj(m=m)}' for m in messages))
-            else:
-                self._logger.debug('Empty thread intro:\n'
-                                   f'    {fobj(c=thread.thread_channel)}')
+            ims = thread.intro_messages
+            self._logger.debug(
+                f'Fetched #{thread.thread_channel.name} intro ({len(ims)}m):' +
+                ''.join(f'\n    {fobj(m=m)}' for m in ims))
+
+        if len(thread.intro_messages) < old_len:
+            pass  # TODO
 
     async def _async_fetch_recents(self, channel):
         """Fetches and examines the recent history of a channel that appeared
