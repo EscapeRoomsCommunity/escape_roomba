@@ -57,7 +57,7 @@ class DiscordMockFixture:
             (m for g in client.guilds for m in g.members if m.id == id), None)
         return client
 
-    def make_guild(self, name='Mock Guild'):
+    def make_guild(self, client, name='Mock Guild'):
         """Returns a new Guild-like Mock."""
 
         guild = self.pytest_mocker.Mock(spec=discord.Guild, name='guild')
@@ -65,6 +65,7 @@ class DiscordMockFixture:
         guild.name = name
         guild.channels = []
         guild.members = []
+        guild.test_client = client
 
         guild.create_text_channel.side_effect = self.pytest_mocker.AsyncMock(
             side_effect=lambda *args, **kwargs:
@@ -113,11 +114,20 @@ class DiscordMockFixture:
             else:
                 raise discord.NotFound(None, f'message {id} not found')
 
+        async def send(content=None, embed=None):
+            message = self.make_message(
+                guild=guild, channel=channel, author=guild.test_client.user,
+                content=content, embed=embed)
+            channel.test_history.append(message)
+            return message
+
         channel.history.side_effect = get_history
         channel.fetch_message.side_effect = fetch_message
+        channel.send.side_effect = send
         return channel
 
-    def make_message(self, guild, channel, author, content='Mock content'):
+    def make_message(self, guild, channel, author,
+                     content='Mock content', embed=None):
         """Returns a new Message-like Mock."""
 
         message = self.pytest_mocker.Mock(spec=discord.Message, name='message')
@@ -126,6 +136,7 @@ class DiscordMockFixture:
         message.channel = channel
         message.author = author
         message.content = content
+        message.embeds = [embed] if embed is not None else []
         message.reactions = []
         return message
 
@@ -147,7 +158,7 @@ class DiscordMockFixture:
 
         self.context.client.guilds[:] = []  # Erase preexisting data.
         for gi in range(guild_count):
-            g = self.make_guild(name=f'Mock Guild {gi}')
+            g = self.make_guild(self.context.client, name=f'Mock Guild {gi}')
             self.context.client.guilds.append(g)
 
             for mi in range(members_per_guild):

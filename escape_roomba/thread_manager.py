@@ -3,6 +3,7 @@ import collections
 import discord
 import logging
 import re
+import unicodedata
 
 from escape_roomba.format_util import fobj
 from escape_roomba.async_exclusive import AsyncExclusive
@@ -37,7 +38,7 @@ class ThreadManager:
     _FETCH_RECENT = 100  # Scan on startup for missed commands.
 
     # Used to extract channel/message ID from existing thread channel topics.
-    _TOPIC_REGEX = re.compile(r'.*\[id=([0-9a-f]*)/([0-9a-f]*)\] *', re.I)
+    _TOPIC_REGEX = re.compile(r'.*\[i?d?=?([0-9a-f]*)/([0-9a-f]*)\] *', re.I)
 
     class _Thread:
         """Tracks a created thread channel, and its origin message."""
@@ -107,7 +108,6 @@ class ThreadManager:
                 channel_id=p.channel_id, message_id=mi)
 
     async def _on_raw_message_edit(self, p):
-        self._logger.debug(f'EDIT {p}')
         me = self._context.client.user  # Skip our own edits.
         if p.data.get('author', {}).get('id', '') != str(me.id):
             await self._async_check_message(
@@ -197,7 +197,7 @@ class ThreadManager:
         if channel is None:
             # Channel not available, treat the message as missing.
             self._logger.debug('Fetch failed (no channel):\n'
-                               f'    {fobj(m=message_id)}')
+                               f'    {fobj(c=channel_id, m=message_id)}')
             await self._async_locked_message_gone(
                 channel_id=channel.id, message_id=message_id)
         else:
@@ -246,18 +246,23 @@ class ThreadManager:
 
         # Post or edit our intro as appropriate.
         if t is not None and t.intro_messages is not None:
-            content = 'Intro Message Test!'
-            embed = None
+            content = None
+            embed = discord.Embed(description=message.content)
+            embed.set_author(
+                name=message.author.display_name,
+                icon_url=message.author.avatar_url)
 
             # Look for an existing intro post by us.
             mine = next((m for m in t.intro_messages if m.author == me), None)
 
             # Post or edit the intro.
             if mine is None and len(t.intro_messages) < self._FETCH_INTRO:
-                t.intro_messages.append(await t.thread_channel.send(
-                    content=content, embed=embed))
-            elif mine is not None and mine.content != content:
-                mine.edit(content=content, embed=embed)
+                m = await t.thread_channel.send(content=content, embed=embed)
+                t.intro_messages.append(m)
+                self._logger.info(f'POSTED INTRO:\n    {fobj(m=m)}')
+            elif mine is not None and (mine.content or '') != (content or ''):
+                await mine.edit(content=content, embed=embed)
+                self._logger.debug(f'Edited intro:\n    {fobj(m=mine)}')
 
     async def _async_create_thread_for_locked_message(self, origin_message):
         """Creates & returns a _Thread for an origin (caller must lock)."""
@@ -265,25 +270,30 @@ class ThreadManager:
         assert self._message_exclusive.is_locked(origin_message.id)
         ci, mi = origin_message.channel.id, origin_message.id
 
-        first_words = ''
-        for match in re.finditer(r'\w+', origin_message.content):
-            word, dash = match.group(), ('-' if first_words else '')
-            remaining = 20 - len(first_words) - len(dash) - len(word)
+        words = re.findall(r'\w+', origin_message.content) or [
+            w for ch in origin_message.content
+            for w in unicodedata.name(ch).split()]
+
+        word_mash = ''
+        for word in words:
+            dash = ('-' if word_mash else '')
+            remaining = 20 - len(word_mash) - len(dash) - len(word)
             if remaining >= 0:
-                first_words += f'{dash}{word}'
+                word_mash += f'{dash}{word}'
                 continue
-            if len(first_words) < 10:
-                first_words += f'{dash}{word[:remaining]}'
-            first_words += self._ELLIPSIS
+            if len(word_mash) < 10:
+                word_mash += f'{dash}{word[:remaining]}'
+            word_mash += self._ELLIPSIS
             break
 
         # Special name and topic format enables recognizability.
-        name = f'{self._THREAD_EMOJI}{first_words}'
-        topic = f'[id={ci:x}/{mi:x}]'
+        name = f'{self._THREAD_EMOJI}{word_mash}'
+        topic = f'[{ci:x}/{mi:x}]'
         if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f'Creating #{name}:\n'
-                               f'    topic="{topic}"\n'
-                               f'    origin={fobj(c=ci, m=mi)}')
+            self._logger.info(f'CREATING CHANNEL:\n'
+                              f'    "{origin_message.guild.name}" #{name}\n'
+                              f'    topic: "{topic}"\n'
+                              f'    origin: {fobj(m=origin_message)}')
 
         channel = await origin_message.guild.create_text_channel(
             name=name, category=origin_message.channel.category,
@@ -302,8 +312,8 @@ class ThreadManager:
         assert self._message_exclusive.is_locked(thread.origin_message_id)
         ci, mi = thread.origin_channel_id, thread.origin_message_id
 
-        self._logger.debug('Deleting channel:\n'
-                           f'    {fobj(c=thread.thread_channel)}')
+        self._logger.info('DELETING CHANNEL:\n'
+                          f'    {fobj(c=thread.thread_channel)}')
         await thread.thread_channel.delete()
         del self._thread_by_channel[thread.thread_channel.id]
         del self._thread_by_origin[ci][mi]
@@ -338,9 +348,9 @@ class ThreadManager:
 
             if self._logger.isEnabledFor(logging.DEBUG):
                 self._logger.debug(f'Found thread (fetching origin, intro):\n'
-                                   f'    {fobj(c=channel)}:\n'
-                                   f'    topic="{channel.topic}"\n'
-                                   f'    origin={fobj(c=ci, m=mi)}')
+                                   f'    {fobj(c=channel)}\n'
+                                   f'    topic: "{channel.topic}"\n'
+                                   f'    origin: {fobj(c=ci, m=mi)}')
 
             t = self._Thread(channel=channel, origin_cid=ci, origin_mid=mi)
             self._thread_by_origin.setdefault(ci, {})[mi] = t
@@ -362,11 +372,15 @@ class ThreadManager:
         if self._logger.isEnabledFor(logging.DEBUG):
             ims = thread.intro_messages
             self._logger.debug(
-                f'Fetched #{thread.thread_channel.name} intro ({len(ims)}m):' +
+                f'Fetched #{thread.thread_channel.name} intro '
+                f'({old_len} => {len(ims)}m):' +
                 ''.join(f'\n    {fobj(m=m)}' for m in ims))
 
+        # When the intro *shrinks*, re-check the origin in case the
+        # thread channel is now eligible for removal.
         if len(thread.intro_messages) < old_len:
-            pass  # TODO
+            await self._async_fetch_locked_message(
+                thread.origin_channel_id, thread.origin_message_id)
 
     async def _async_fetch_recents(self, channel):
         """Fetches and examines the recent history of a channel that appeared

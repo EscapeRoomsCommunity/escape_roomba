@@ -83,13 +83,18 @@ def fobj(client=None, g=None, c=None, u=None, m=None):
     elif u:
         out.append(f'u={fid(u)}')
 
+    def abbreviate(text):
+        text = ' '.join((text or '').split())  # Normalize spaces.
+        return text[:20].strip() + ' ...' if len(text) > 20 else text
+
     if hasattr(m, 'content'):  # Message-like
-        text = ' '.join(m.content.split())
-        if len(text) > 20:
-            text = text[:20].strip() + ' ...'
         if out:
             out[-1] = out[-1] + ':'
-        out.append(f'"{text}"')
+        text = abbreviate(m.content)
+        out.append(f'"{text}"' if text else '[no content]')
+        for e in m.embeds if hasattr(m, 'embeds') else []:
+            text = abbreviate(e.title or e.description)
+            out.append(f'E[{text}]' if text else '[empty embed]')
     elif m:
         out.append(f'm={fid(m)}')
 
