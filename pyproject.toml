@@ -5,7 +5,7 @@ description = ""
 authors = ["Dan Egnor <egnor@ofb.net>", "Ana Ulin <ana@ulin.org>"]
 
 [tool.poetry.scripts]
-run_bot = 'escape_roomba.run_bot:main'
+thread_bot = 'escape_roomba.thread_manager:thread_bot_main'
 
 [tool.poetry.dependencies]
 python = "^3.8"

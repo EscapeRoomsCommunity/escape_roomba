@@ -2,6 +2,7 @@
 docs.pytest.org/en/stable/fixture.html#conftest-py-sharing-fixture-functions.
 """
 
+import argparse
 import collections
 import logging
 
@@ -9,7 +10,7 @@ import discord
 import discord.abc
 import pytest
 
-from escape_roomba.context import Context
+import escape_roomba.context
 
 
 class DiscordMockFixture:
@@ -26,9 +27,11 @@ class DiscordMockFixture:
 
     def __init__(self, pytest_mocker):
         self.pytest_mocker = pytest_mocker
-        self.context = Context()
-        self.context.logger = logging.getLogger('bot_test')
-        self.context.client = self.make_client()
+
+        parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
+        self.context = escape_roomba.context.Context(
+            parsed_args=parser.parse_args([]),
+            inject_client=self.make_client())
         self.event_queue = []
         self.reset_data()  # Default setup.
 

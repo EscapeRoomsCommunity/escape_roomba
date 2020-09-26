@@ -10,12 +10,11 @@ from escape_roomba.async_exclusive import AsyncExclusive
 
 
 # TODO:
-# - put an intro card embed at the top of new thread channels
 # - manage visibility of thread channels (origin author + people who react?)
 # - allow people to drop out of a thread channel (emoji on intro embed?)
 # - allow specifying where people can/can't create threads?
 # - let people set thread channel name & topic (commands start with emoji?)
-# - archive thread channels once inactive for a while
+# - archive thread channels once inactive for a while (or on request)
 # - handle orphaned threads (post something and edit the intro embed?)
 # - maybe use emoji to indicate number/recency of messages in thread???
 
@@ -78,7 +77,7 @@ class ThreadManager:
         # On startup, initialize the guilds we're already joined to.
         await asyncio.gather(
             *[self._on_guild_join(g) for g in self._context.client.guilds])
-        self._logger.debug('🧵🧵🧵 Ready! 🧵🧵🧵')
+        self._logger.info('🧵🧵🧵 Ready! 🧵🧵🧵')
 
     async def _on_guild_join(self, guild):
         # Scan *all* existing channels *before* checking history to avoid
@@ -138,8 +137,8 @@ class ThreadManager:
         await asyncio.gather(self._async_check_channel(channel),
                              self._async_fetch_recents(channel))
 
-    async def _on_guild_channel_update(self, channel):
-        await self._async_check_channel(channel)
+    async def _on_guild_channel_update(self, before, after):
+        await self._async_check_channel(after)
 
     #
     # Internal methods
@@ -246,7 +245,9 @@ class ThreadManager:
 
         # Post or edit our intro as appropriate.
         if t is not None and t.intro_messages is not None:
-            content = None
+            content = (
+                'Start of thread channel for message in '
+                f'<#{message.channel.id}>:')
             embed = discord.Embed(description=message.content)
             embed.set_author(
                 name=message.author.display_name,
@@ -259,7 +260,7 @@ class ThreadManager:
             if mine is None and len(t.intro_messages) < self._FETCH_INTRO:
                 m = await t.thread_channel.send(content=content, embed=embed)
                 t.intro_messages.append(m)
-                self._logger.info(f'POSTED INTRO:\n    {fobj(m=m)}')
+                self._logger.info(f'Posted intro:\n    {fobj(m=m)}')
             elif mine is not None and (mine.content or '') != (content or ''):
                 await mine.edit(content=content, embed=embed)
                 self._logger.debug(f'Edited intro:\n    {fobj(m=mine)}')
@@ -290,7 +291,7 @@ class ThreadManager:
         name = f'{self._THREAD_EMOJI}{word_mash}'
         topic = f'[{ci:x}/{mi:x}]'
         if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.info(f'CREATING CHANNEL:\n'
+            self._logger.info('Creating channel:\n'
                               f'    "{origin_message.guild.name}" #{name}\n'
                               f'    topic: "{topic}"\n'
                               f'    origin: {fobj(m=origin_message)}')
@@ -312,7 +313,7 @@ class ThreadManager:
         assert self._message_exclusive.is_locked(thread.origin_message_id)
         ci, mi = thread.origin_channel_id, thread.origin_message_id
 
-        self._logger.info('DELETING CHANNEL:\n'
+        self._logger.info('Deleting channel:\n'
                           f'    {fobj(c=thread.thread_channel)}')
         await thread.thread_channel.delete()
         del self._thread_by_channel[thread.thread_channel.id]
@@ -346,8 +347,16 @@ class ThreadManager:
             if channel.id in self._thread_by_channel:
                 return  # The channel is already registered.
 
+            t = self._thread_by_origin.get(ci, {}).get(mi)
+            if t:
+                self._logger.error(
+                    'Multiple channels for same origin!!\n'
+                    f'    {fobj(c=t.thread_channel)}\n'
+                    f'    {fobj(c=channel)}')
+                return
+
             if self._logger.isEnabledFor(logging.DEBUG):
-                self._logger.debug(f'Found thread (fetching origin, intro):\n'
+                self._logger.debug('Found thread (fetching origin, intro):\n'
                                    f'    {fobj(c=channel)}\n'
                                    f'    topic: "{channel.topic}"\n'
                                    f'    origin: {fobj(c=ci, m=mi)}')
@@ -411,6 +420,26 @@ class ThreadManager:
                     del self._thread_by_channel[channel.id]
                     del self._thread_by_origin[ci][mi]
                     if self._logger.isEnabledFor(logging.DEBUG):
-                        self._logger.debug(f'Thread channel was deleted:\n'
+                        self._logger.debug('Thread channel was deleted:\n'
                                            f'    {fobj(c=channel)}\n'
                                            f'    origin={fobj(c=ci, m=mi)}')
+
+
+def thread_bot_main():
+    """Main entry point from 'thread_bot' wrapper script (pyproject.yaml)."""
+
+    import argparse
+
+    import escape_roomba.context
+    import escape_roomba.event_logger
+
+    arg_parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
+    context = escape_roomba.context.Context(
+        parsed_args=arg_parser.parse_args(),
+        max_messages=None,
+        fetch_offline_members=False,
+        guild_subscriptions=False)
+
+    escape_roomba.event_logger.EventLogger(context)
+    escape_roomba.thread_manager.ThreadManager(context)
+    context.run_forever()
