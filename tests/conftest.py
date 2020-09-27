@@ -139,6 +139,7 @@ class DiscordMockFixture:
         message.channel = channel
         message.author = author
         message.content = content
+        message.attachments = []
         message.embeds = [embed] if embed is not None else []
         message.reactions = []
         return message
