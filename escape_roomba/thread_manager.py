@@ -37,7 +37,8 @@ class ThreadManager:
     _FETCH_RECENT = 100  # Scan on startup for missed commands.
 
     # Used to extract channel/message ID from existing thread channel topics.
-    _TOPIC_REGEX = re.compile(r'.*\[i?d?=?([0-9a-f]*)/([0-9a-f]*)\] *', re.I)
+    _TOPIC_REGEX = re.compile(
+        r'.*\[(?:id=)?(<#[0-9]+>|[0-9a-f]+)/([0-9a-f]+)\][\s.]*', re.I)
 
     class _Thread:
         """Tracks a created thread channel, and its origin message."""
@@ -231,7 +232,10 @@ class ThreadManager:
         # on to the 🧵 emoji, create a new channel (and pile on the emoji).
         if rx is not None and rx.count > 0 and not rx.me:
             if t is None:
-                t = await self._async_create_thread_for_locked_message(message)
+                users = [u async for u in rx.users(limit=1)]
+                t = await self._async_create_thread_for_locked_message(
+                    origin_message=message,
+                    creating_user=users[0] if users else None)
             await message.add_reaction(rx)  # Acknowledge after creation.
 
         # If there *is* an existing channel but other reactions are gone
@@ -246,12 +250,11 @@ class ThreadManager:
         # Post or edit our intro as appropriate.
         if t is not None and t.intro_messages is not None:
             # Compute desired content for the intro message.
-            content = (
-                'Start of thread for [this message]'
-                f'(https://discordapp.com/channels/{gi}/{ci}/{mi}) '
-                f'in <#{message.channel.id}>:')
-            embed = discord.Embed(description=message.content)
-            # embed.set_footer(text='Hello')
+            content = ''
+            embed = discord.Embed(description=(
+                    message.content + '\n\xA0\n🧵 [original message]'
+                    f'(https://discordapp.com/channels/{gi}/{ci}/{mi})'
+                    f' in <#{ci}> by <@{message.author.id}>').strip())
             embed.set_author(
                 name=message.author.display_name,
                 icon_url=message.author.avatar_url)
@@ -268,11 +271,16 @@ class ThreadManager:
                 old_dict = old.embeds[0].to_dict() if old.embeds else {}
                 old_dict.get('author', {}).pop('proxy_icon_url', None)
                 new_dict = embed.to_dict() if embed else {}
-                if old.content != content or old_dict != new_dict:
+                if (old.content or '') != content or old_dict != new_dict:
+                    self._logger.debug(
+                        'Updating intro:\n'
+                        f'    old: [{old.content}] / {old_dict}\n'
+                        f'    new: [{content}] / {new_dict}')
                     await old.edit(content=content, embed=embed)
-                    self._logger.debug(f'Edited intro:\n    {fobj(m=old)}')
+                    self._logger.info(f'Edited intro:\n    {fobj(m=old)}')
 
-    async def _async_create_thread_for_locked_message(self, origin_message):
+    async def _async_create_thread_for_locked_message(
+        self, origin_message, creating_user):
         """Creates & returns a _Thread for an origin (caller must lock)."""
 
         assert self._message_exclusive.is_locked(origin_message.id)
@@ -296,7 +304,8 @@ class ThreadManager:
 
         # Special name and topic format enables recognizability.
         name = f'{self._THREAD_EMOJI}{word_mash}'
-        topic = f'[{ci:x}/{mi:x}]'
+        tag = f' started by <@{creating_user.id}>' if creating_user else ''
+        topic = (f'Thread{tag} for [<#{ci}>/{mi:x}].')
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.info('Creating channel:\n'
                               f'    "{origin_message.guild.name}" #{name}\n'
@@ -349,7 +358,9 @@ class ThreadManager:
         if not topic_match:
             return  # Not the channel topic format used for thread channels.
 
-        ci, mi = (int(g, 16) for g in topic_match.groups())
+        cref = topic_match.group(1)
+        ci = int(cref[2:-1]) if cref.startswith('<#') else int(cref, 16)
+        mi = int(topic_match.group(2), 16)
         async with self._message_exclusive.locker(mi):
             if channel.id in self._thread_by_channel:
                 return  # The channel is already registered.
