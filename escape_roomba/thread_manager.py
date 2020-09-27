@@ -11,11 +11,9 @@ from escape_roomba.async_exclusive import AsyncExclusive
 
 # TODO:
 # - manage visibility of thread channels (origin author + people who react?)
-# - allow people to drop out of a thread channel (emoji on intro embed?)
 # - allow specifying where people can/can't create threads?
 # - let people set thread channel name & topic (commands start with emoji?)
 # - archive thread channels once inactive for a while (or on request)
-# - handle orphaned threads (post something and edit the intro embed?)
 # - maybe use emoji to indicate number/recency of messages in thread???
 
 
@@ -249,38 +247,66 @@ class ThreadManager:
 
         # Post or edit our intro as appropriate.
         if t is not None and t.intro_messages is not None:
-            # Compute desired content for the intro message.
-            content = ''
-            embed = discord.Embed(description=(
-                    message.content + '\n\xA0\n🧵 [original message]'
-                    f'(https://discordapp.com/channels/{gi}/{ci}/{mi})'
-                    f' in <#{ci}> by <@{message.author.id}>').strip())
-            embed.set_author(
-                name=message.author.display_name,
-                icon_url=message.author.avatar_url)
+            # Update intro message content and attached embed.
+            who = message.author
+            embed = discord.Embed()
+            embed.set_author(name=who.display_name, icon_url=who.avatar_url)
+            embed.description = (
+                message.content + '\n\xA0\n🧵 [original message]'
+                f'(https://discordapp.com/channels/{gi}/{ci}/{mi})'
+                f' in <#{ci}> by <@{who.id}>').strip()
 
-            # Look for the first intro post by us.
-            old = next((m for m in t.intro_messages if m.author == me), None)
+            await self._async_update_locked_thread_intro(
+                thread=t, content='', embed=embed)
 
-            # Post or edit the intro if actual != desired.
-            if old is None and len(t.intro_messages) < self._FETCH_INTRO:
-                m = await t.thread_channel.send(content=content, embed=embed)
-                t.intro_messages.append(m)
-                self._logger.info(f'Posted intro:\n    {fobj(m=m)}')
-            elif old is not None:
-                old_dict = old.embeds[0].to_dict() if old.embeds else {}
-                old_dict.get('author', {}).pop('proxy_icon_url', None)
-                new_dict = embed.to_dict() if embed else {}
-                if (old.content or '') != content or old_dict != new_dict:
-                    self._logger.debug(
-                        'Updating intro:\n'
-                        f'    old: [{old.content}] / {old_dict}\n'
-                        f'    new: [{content}] / {new_dict}')
-                    await old.edit(content=content, embed=embed)
-                    self._logger.info(f'Edited intro:\n    {fobj(m=old)}')
+    async def _async_locked_message_gone(self, channel_id, message_id):
+        """Handles a message that was deleted (caller must hold lock)."""
+
+        assert self._message_exclusive.is_locked(message_id)
+        t = self._thread_by_origin.setdefault(channel_id, {}).get(message_id)
+        me = self._context.client.user  # Skip our own edits.
+
+        # If the thread has no added content, remove the channel.
+        if (t is not None and t.intro_messages is not None and
+                not any(m for m in t.intro_messages if m.author != me)):
+            await self._async_delete_locked_thread(t)
+        elif t is not None:
+            content = f'🧵 original message in <#{channel_id}> was **deleted**'
+            await self._async_update_locked_thread_intro(
+                thread=t, content=content, embed=None)
+
+    async def _async_update_locked_thread_intro(self, thread, content, embed):
+        """Adds or edits a _Thread's intro message (caller must lock)."""
+
+        assert self._message_exclusive.is_locked(thread.origin_message_id)
+        me = self._context.client.user
+
+        # Look for the first intro post by us.
+        old = next((m for m in thread.intro_messages if m.author == me), None)
+
+        # Post or edit the intro if actual != desired.
+        if old is None and len(thread.intro_messages) >= self._FETCH_INTRO:
+            self._logger.error(
+                'Someone beat us to first!\n'
+                f'    {fobj(m=thread.intro_messages[0])}')
+        elif old is None and len(thread.intro_messages) < self._FETCH_INTRO:
+            m = await thread.thread_channel.send(content=content, embed=embed)
+            thread.intro_messages.append(m)
+            self._logger.info(f'Posted intro:\n    {fobj(m=m)}')
+        elif old is not None:
+            old_dict = old.embeds[0].to_dict() if old.embeds else {}
+            old_dict.get('author', {}).pop('proxy_icon_url', None)
+            new_dict = embed.to_dict() if embed else {}
+            if (old.content or '') != content or old_dict != new_dict:
+                self._logger.debug(
+                    'Updating intro:\n'
+                    f'    old: [{old.content}] / {old_dict}\n'
+                    f'    new: [{content}] / {new_dict}')
+                await old.edit(content=content, embed=embed)
+                self._logger.info(f'Edited intro:\n    {fobj(m=old)}')
 
     async def _async_create_thread_for_locked_message(
-        self, origin_message, creating_user):
+            self, origin_message, creating_user):
         """Creates & returns a _Thread for an origin (caller must lock)."""
 
         assert self._message_exclusive.is_locked(origin_message.id)
@@ -334,18 +360,6 @@ class ThreadManager:
         await thread.thread_channel.delete()
         del self._thread_by_channel[thread.thread_channel.id]
         del self._thread_by_origin[ci][mi]
-
-    async def _async_locked_message_gone(self, channel_id, message_id):
-        """Handles a message that was deleted (caller must hold lock)."""
-
-        # If the thread has no added content, remove the channel.
-        t = self._thread_by_origin.setdefault(channel_id, {}).get(message_id)
-        me = self._context.client.user  # Skip our own edits.
-        if (t is not None and t.intro_messages is not None and
-                not any(m for m in t.intro_messages if m.author != me)):
-            await self._async_delete_locked_thread(t)
-        else:
-            pass  # TODO: mark the thread as orphaned (in its intro?)
 
     async def _async_check_channel(self, channel):
         """Examines channel metadata; registers existing thread channels."""
