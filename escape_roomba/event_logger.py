@@ -96,7 +96,8 @@ class EventLogger:
 
     async def _debug_on_raw_message_edit(self, p):
         self._debug('Raw edit message\n    ' +
-                    self._fobj(c=p.channel_id, m=p.message_id))
+                    self._fobj(c=p.channel_id, m=p.message_id,
+                               u=int(p.data.get('author', {}).get('id', 0))))
 
     async def _debug_on_reaction_add(self, r, u):
         self._debug(f'Add [{r.emoji}] {self._fobj(u=u)} on\n    ' +

@@ -214,7 +214,7 @@ class ThreadManager:
         """Processes a thread origin re-fetch (caller must hold lock)."""
 
         assert self._message_exclusive.is_locked(message.id)
-        ci, mi = message.channel.id, message.id
+        gi, ci, mi = message.channel.guild.id, message.channel.id, message.id
         t = self._thread_by_origin.get(ci, {}).get(mi)
 
         rxs = message.reactions
@@ -245,25 +245,32 @@ class ThreadManager:
 
         # Post or edit our intro as appropriate.
         if t is not None and t.intro_messages is not None:
+            # Compute desired content for the intro message.
             content = (
-                'Start of thread channel for message in '
-                f'<#{message.channel.id}>:')
+                'Start of thread for [this message]'
+                f'(https://discordapp.com/channels/{gi}/{ci}/{mi}) '
+                f'in <#{message.channel.id}>:')
             embed = discord.Embed(description=message.content)
+            # embed.set_footer(text='Hello')
             embed.set_author(
                 name=message.author.display_name,
                 icon_url=message.author.avatar_url)
 
-            # Look for an existing intro post by us.
-            mine = next((m for m in t.intro_messages if m.author == me), None)
+            # Look for the first intro post by us.
+            old = next((m for m in t.intro_messages if m.author == me), None)
 
-            # Post or edit the intro.
-            if mine is None and len(t.intro_messages) < self._FETCH_INTRO:
+            # Post or edit the intro if actual != desired.
+            if old is None and len(t.intro_messages) < self._FETCH_INTRO:
                 m = await t.thread_channel.send(content=content, embed=embed)
                 t.intro_messages.append(m)
                 self._logger.info(f'Posted intro:\n    {fobj(m=m)}')
-            elif mine is not None and (mine.content or '') != (content or ''):
-                await mine.edit(content=content, embed=embed)
-                self._logger.debug(f'Edited intro:\n    {fobj(m=mine)}')
+            elif old is not None:
+                old_dict = old.embeds[0].to_dict() if old.embeds else {}
+                old_dict.get('author', {}).pop('proxy_icon_url', None)
+                new_dict = embed.to_dict() if embed else {}
+                if old.content != content or old_dict != new_dict:
+                    await old.edit(content=content, embed=embed)
+                    self._logger.debug(f'Edited intro:\n    {fobj(m=old)}')
 
     async def _async_create_thread_for_locked_message(self, origin_message):
         """Creates & returns a _Thread for an origin (caller must lock)."""
