@@ -1,8 +1,9 @@
 import asyncio
 import collections
 import discord
+import discord.utils
 import logging
-import re
+import regex
 import unicodedata
 
 from escape_roomba.format_util import fobj
@@ -30,13 +31,14 @@ class ThreadManager:
 
     _THREAD_EMOJI = '🧵'  # Reaction emoji trigger, and channel prefix.
     _ELLIPSIS = '…'       # Used at the end of thread channel names.
+    _CHANNEL_LENGTH = 20  # Maximum length of generated channel name
 
     _FETCH_INTRO = 2     # Look for our embed & one other.
     _FETCH_RECENT = 100  # Scan on startup for missed commands.
 
     # Used to extract channel/message ID from existing thread channel topics.
-    _TOPIC_REGEX = re.compile(
-        r'.*\[(?:id=)?(<#[0-9]+>|[0-9a-f]+)/([0-9a-f]+)\][\s.]*', re.I)
+    _TOPIC_REGEX = regex.compile(
+        r'.*\[(?:id=)?(<#[0-9]+>|[0-9a-f]+)/([0-9a-f]+)\][\s.]*', regex.I)
 
     class _Thread:
         """Tracks a created thread channel, and its origin message."""
@@ -245,17 +247,27 @@ class ThreadManager:
             await self._async_delete_locked_thread(t)
             await message.remove_reaction(rx, self._context.client.user)
 
-        # Post or edit our intro as appropriate.
+        # Post or edit the thread intro as appropriate.
         if t is not None and t.intro_messages is not None:
             # Update intro message content and attached embed.
             who = message.author
-            embed = discord.Embed()
-            embed.set_author(name=who.display_name, icon_url=who.avatar_url)
-            embed.description = (
-                message.content + '\n\xA0\n🧵 [original message]'
+            description = (message.content + '\n\xA0\n🧵 [original message]'
                 f'(https://discordapp.com/channels/{gi}/{ci}/{mi})'
                 f' in <#{ci}> by <@{who.id}>').strip()
 
+            for a in message.attachments:
+                escaped_name = discord.utils.escape_markdown(a.filename)
+                description += f'\n📎 [{escaped_name}]({a.proxy_url or a.url})'
+                if a.is_spoiler():
+                    a.description += ' (spoiler!)'
+
+            for e in message.embeds:
+                if e.title and e.url:
+                    escaped_title = discord.utils.escape_markdown(e.title)
+                    description += f'\n🔗 [{escaped_title}]({e.url})'
+
+            embed = discord.Embed(description=description)
+            embed.set_author(name=who.display_name, icon_url=who.avatar_url)
             await self._async_update_locked_thread_intro(
                 thread=t, content='', embed=embed)
 
@@ -287,7 +299,7 @@ class ThreadManager:
         # Post or edit the intro if actual != desired.
         if old is None and len(thread.intro_messages) >= self._FETCH_INTRO:
             self._logger.error(
-                'Someone beat us to first!\n'
+                'Someone else made the first posts!\n'
                 f'    {fobj(m=thread.intro_messages[0])}')
         elif old is None and len(thread.intro_messages) < self._FETCH_INTRO:
             m = await thread.thread_channel.send(content=content, embed=embed)
@@ -312,31 +324,41 @@ class ThreadManager:
         assert self._message_exclusive.is_locked(origin_message.id)
         ci, mi = origin_message.channel.id, origin_message.id
 
-        words = re.findall(r'\w+', origin_message.content) or [
-            w for ch in origin_message.content
-            for w in unicodedata.name(ch).split()]
+        # Generate a channel name from the message content.
+        # For better length trimming, take a stab at character culling
+        # (note, emoji ("So") and the ZWJ ("Cf") are valid in channel names);
+        # see wikipedia.org/wiki/Unicode_character_property#General_Category.
+        words = regex.sub(r'[^\p{L}\p{M}\p{N}\p{Sk}\p{So}\p{Cf}]+', ' ',
+                          origin_message.content).split()
 
-        word_mash = ''
+        mash = ''
         for word in words:
-            dash = ('-' if word_mash else '')
-            remaining = 20 - len(word_mash) - len(dash) - len(word)
+            to_add = ('-' if mash else '') + word
+            remaining = self._CHANNEL_LENGTH - len(mash) - len(to_add)
             if remaining >= 0:
-                word_mash += f'{dash}{word}'
-                continue
-            if len(word_mash) < 10:
-                word_mash += f'{dash}{word[:remaining]}'
-            word_mash += self._ELLIPSIS
+                mash += to_add
+                continue  # The word fits in its entirety; keep going.
+            if len(mash) < self._CHANNEL_LENGTH // 2:
+                # Chop long words if needed to get a reasonable channel mash.
+                mash += f'{to_add[:remaining]}'
+            mash += self._ELLIPSIS
             break
 
+        basic_name = f'{self._THREAD_EMOJI}{mash or "thread"}'
+        name, number = basic_name, 1  # Add a suffix if needed for uniqueness.
+        existing = set(c.name for c in origin_message.guild.channels)
+        while name in existing:
+            number += 1
+            name = f'{basic_name}-{number}'
+
         # Special name and topic format enables recognizability.
-        name = f'{self._THREAD_EMOJI}{word_mash}'
         tag = f' started by <@{creating_user.id}>' if creating_user else ''
         topic = (f'Thread{tag} for [<#{ci}>/{mi:x}].')
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.info('Creating channel:\n'
                               f'    "{origin_message.guild.name}" #{name}\n'
-                              f'    topic: "{topic}"\n'
-                              f'    origin: {fobj(m=origin_message)}')
+                              f'    topic "{topic}"\n'
+                              f'    origin {fobj(m=origin_message)}')
 
         channel = await origin_message.guild.create_text_channel(
             name=name, category=origin_message.channel.category,
