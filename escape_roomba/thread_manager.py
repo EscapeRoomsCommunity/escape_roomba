@@ -40,6 +40,10 @@ class ThreadManager:
     _TOPIC_REGEX = regex.compile(
         r'.*\[(?:id=)?(<#[0-9]+>|[0-9a-f]+)/([0-9a-f]+)\][\s.]*', regex.I)
 
+    # Used to strip things when generating Discord channel names from text.
+    _CHANNEL_CLEANUP_REGEX = regex.compile(
+        r'([^\p{L}\p{M}\p{N}\p{Sk}\p{So}\p{Cf}]|https?://(www\.?))+')
+
     class _Thread:
         """Tracks a created thread channel, and its origin message."""
 
@@ -328,10 +332,9 @@ class ThreadManager:
         # For better length trimming, take a stab at character culling
         # (note, emoji ("So") and the ZWJ ("Cf") are valid in channel names);
         # see wikipedia.org/wiki/Unicode_character_property#General_Category.
-        words = regex.sub(r'[^\p{L}\p{M}\p{N}\p{Sk}\p{So}\p{Cf}]+', ' ',
-                          origin_message.content).split()
-
         mash = ''
+        text = origin_message.content or ''
+        words = self._CHANNEL_CLEANUP_REGEX.sub(' ', text).split()
         for word in words:
             to_add = ('-' if mash else '') + word
             remaining = self._CHANNEL_LENGTH - len(mash) - len(to_add)
