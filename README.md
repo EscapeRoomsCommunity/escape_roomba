@@ -2,7 +2,7 @@
 
 *Removing the dust bunnies from the Escape Rooms Discord, since 2020.*
 
-This is an experimental Discord automation to support the Escape Rooms Discord
+This is experimental Discord automation to support the Escape Rooms Discord
 community.
 
 - [Useful Resources](#useful-resources)
