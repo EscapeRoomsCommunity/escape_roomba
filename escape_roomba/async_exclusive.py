@@ -3,8 +3,9 @@ import contextlib
 
 
 class AsyncExclusive:
-    """Allows callers to serialize async (not thread!) operations based on ID,
-    without needing a separate lock object for every ID encountered."""
+    """Allows callers to serialize *async* operations (*not* multithreaded
+    operations -- this is not thread safe!) based on ID keys, without needing
+    a separate lock object for every ID encountered."""
 
     def __init__(self):
         self._event_loop = asyncio.get_event_loop()

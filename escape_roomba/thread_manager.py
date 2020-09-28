@@ -15,7 +15,7 @@ from escape_roomba.async_exclusive import AsyncExclusive
 # - allow specifying where people can/can't create threads?
 # - let people set thread channel name & topic (commands start with emoji?)
 # - archive thread channels once inactive for a while (or on request)
-# - maybe use emoji to indicate number/recency of messages in thread???
+# - use emoji (eg. 🔥) to indicate activity level in thread???
 
 
 class ThreadManager:
@@ -66,12 +66,11 @@ class ThreadManager:
 
     #
     # Discord event listeners
-    # (https://discordpy.readthedocs.io/en/latest/api.html#event-reference).
+    # (https://discordpy.readthedocs.io/en/latest/api.html#event-reference)
     #
-    # This code uses "raw" events to avoid depending on cache coverage,
-    # so updates often require a message fetch to get context. Fetches are
-    # independent and asynchronous; to avoid races that could have out-of-date
-    # data arriving last, message updates go through _async_check_message().
+    # Many events require asynchronous steps to get context; to avoid races,
+    # handlers call _async_check_message() and/or _async_check_channel(),
+    # which acquire locks and then take appropriate action.
     #
 
     async def _on_ready(self):
@@ -132,7 +131,7 @@ class ThreadManager:
             channel_id=p.channel_id, message_id=p.message_id)
 
     async def _on_raw_reaction_clear_emoji(self, payload):
-        await self._async_update_message(
+        await self._async_check_message(
             channel_id=p.channel_id, message_id=p.message_id, emoji=p.emoji)
 
     async def _on_guild_channel_delete(self, channel):
@@ -147,6 +146,29 @@ class ThreadManager:
 
     #
     # Internal methods
+    #
+    # Operations lock self._exclusive_message using the origin message ID (int)
+    # of the thread (or thread-to-be) to avoid races.
+    #
+    # Discord message event listeners (above)
+    #  🡲  _async_check_message (filters update, acquires lock)
+    #     ┄┄┄┄┄┄┄ methods below run with the lock held ┄┄┄┄┄┄┄┄
+    #      🡢  ( _async_fetch_locked_intro for intro changes - see below )
+    #      🡲  _async_fetch_locked_message (attempts message fetch)
+    #          🡲  ⎛ _async_locked_message_update (if fetch successful)    ⎞
+    #             ⎝ _async_locked_message_gone (if fetch was "not found") ⎠
+    #                   ⎛ _async_create_thread_for_locked_message (if new 🧵) ⎞
+    #                🡲  ⎜ _async_delete_locked_thread (if 🧵/message gone)    ⎟
+    #                   ⎝ _async_update_locked_intro (if new 🧵/message edit) ⎠
+    #
+    # Discord channel event listeners (above)
+    #  🡲  _async_fetch_recents (catches up to recent channel history on start)
+    #      🡢  ( _async_check_message for recent messages - see above )
+    #  🡲  _async_forget_channel (removes _Thread object from tracking)
+    #  🡲  _async_check_channel (filters update, acquires lock)
+    #     ┄┄┄┄┄┄┄ methods below run with the lock held ┄┄┄┄┄┄┄┄
+    #      🡲  _async_fetch_locked_intro (loads first 2 messages)
+    #          🡢  ( _async_fetch_locked_message - see section above )
     #
 
     async def _async_check_message(self, channel_id=None, channel=None,
@@ -169,7 +191,7 @@ class ThreadManager:
         #   there is an existing fetch in progress for the message OR
         #   the message is an existing thread channel origin OR
         #   the message has a 🧵 emoji reaction OR
-        #   there was a change to 🧵 emoji reactions (not by ourselves)
+        #   there was a change to 🧵 emoji reactions (not by this bot)
         if (self._message_exclusive.is_locked(id) or
             mi in self._thread_by_origin.get(ci, {}) or
             str(emoji or '') == self._THREAD_EMOJI or
@@ -182,7 +204,7 @@ class ThreadManager:
 
         # The change could be a relevant *intro* message update if:
         #   the message's channel is a thread channel AND
-        #   ( we haven't found a full set of intro messages OR
+        #   ( there isn't a full set of intro messages OR
         #     the update is for an existing intro messages )
         t = self._thread_by_channel.get(ci)
         if (t is not None and t.intro_messages is not None and (
@@ -232,8 +254,8 @@ class ThreadManager:
                 f'    {fobj(m=message)}\n'
                 f'    reaction={rt} existing={fobj(c=tid) if tid else "None"}')
 
-        # If there is no existing thread channel and we have not already piled
-        # on to the 🧵 emoji, create a new channel (and pile on the emoji).
+        # If there is no existing thread channel and this bot has not already
+        # piled on to the 🧵, create a new channel (and pile on the reaction).
         if rx is not None and rx.count > 0 and not rx.me:
             if t is None:
                 users = [u async for u in rx.users(limit=1)]
@@ -272,7 +294,7 @@ class ThreadManager:
 
             embed = discord.Embed(description=description)
             embed.set_author(name=who.display_name, icon_url=who.avatar_url)
-            await self._async_update_locked_thread_intro(
+            await self._async_update_locked_intro(
                 thread=t, content='', embed=embed)
 
     async def _async_locked_message_gone(self, channel_id, message_id):
@@ -282,16 +304,17 @@ class ThreadManager:
         t = self._thread_by_origin.setdefault(channel_id, {}).get(message_id)
         me = self._context.client.user  # Skip our own edits.
 
-        # If the thread has no added content, remove the channel.
         if (t is not None and t.intro_messages is not None and
                 not any(m for m in t.intro_messages if m.author != me)):
+            # The thread is empty (no added content), remove the channel.
             await self._async_delete_locked_thread(t)
         elif t is not None:
+            # The thread has messages in it, edit intro but do not delete.
             content = f'🧵 original message in <#{channel_id}> was **deleted**'
-            await self._async_update_locked_thread_intro(
+            await self._async_update_locked_intro(
                 thread=t, content=content, embed=None)
 
-    async def _async_update_locked_thread_intro(self, thread, content, embed):
+    async def _async_update_locked_intro(self, thread, content, embed):
         """Adds or edits a _Thread's intro message (caller must lock)."""
 
         assert self._message_exclusive.is_locked(thread.origin_message_id)
@@ -303,7 +326,7 @@ class ThreadManager:
         # Post or edit the intro if actual != desired.
         if old is None and len(thread.intro_messages) >= self._FETCH_INTRO:
             self._logger.error(
-                'Someone else made the first posts!\n'
+                'Someone else made the first post!\n'
                 f'    {fobj(m=thread.intro_messages[0])}')
         elif old is None and len(thread.intro_messages) < self._FETCH_INTRO:
             m = await thread.thread_channel.send(content=content, embed=embed)
@@ -442,8 +465,10 @@ class ThreadManager:
                 f'({old_len} => {len(ims)}m):' +
                 ''.join(f'\n    {fobj(m=m)}' for m in ims))
 
-        # When the intro *shrinks*, re-check the origin in case the
-        # thread channel is now eligible for removal.
+        # Intro messages are tracked to know if there are other channel posts,
+        # which prevent channel deletion if the original 🧵 is removed.
+        # If the intro set shrinks, re-check the origin to handle the corner
+        # case where the 🧵 was removed and *then* all channel posts deleted.
         if len(thread.intro_messages) < old_len:
             await self._async_fetch_locked_message(
                 thread.origin_channel_id, thread.origin_message_id)
@@ -467,19 +492,21 @@ class ThreadManager:
         """Handles a channel that is no longer visible (server detach,
         channel deleted, visibility change)."""
 
-        # If it was a thread channel, remove it from tracking.
+        # Find the _Thread to know which message ID to lock.
         t = self._thread_by_channel.get(channel.id)
         if t is not None:
-            # Lock and check again to avoid conflicts.
             async with self._message_exclusive.locker(t.origin_message_id):
-                if self._thread_by_channel.get(channel.id) is t:
+                # The _Thread may have been removed while waiting for the lock.
+                new_t = self._thread_by_channel.get(t)
+                if new_t is not None:
+                    assert new_t is t  # If not removed, should be the same.
                     ci, mi = t.origin_channel_id, t.origin_message_id
                     del self._thread_by_channel[channel.id]
                     del self._thread_by_origin[ci][mi]
                     if self._logger.isEnabledFor(logging.DEBUG):
                         self._logger.debug('Thread channel was deleted:\n'
                                            f'    {fobj(c=channel)}\n'
-                                           f'    origin={fobj(c=ci, m=mi)}')
+                                           f'    origin: {fobj(c=ci, m=mi)}')
 
 
 def thread_bot_main():
