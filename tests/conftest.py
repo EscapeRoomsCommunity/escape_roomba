@@ -2,6 +2,7 @@
 docs.pytest.org/en/stable/fixture.html#conftest-py-sharing-fixture-functions.
 """
 
+import argparse
 import collections
 import logging
 
@@ -9,7 +10,7 @@ import discord
 import discord.abc
 import pytest
 
-from escape_roomba.context import Context
+import escape_roomba.context
 
 
 class DiscordMockFixture:
@@ -26,9 +27,11 @@ class DiscordMockFixture:
 
     def __init__(self, pytest_mocker):
         self.pytest_mocker = pytest_mocker
-        self.context = Context()
-        self.context.logger = logging.getLogger('bot_test')
-        self.context.client = self.make_client()
+
+        parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
+        self.context = escape_roomba.context.Context(
+            parsed_args=parser.parse_args([]),
+            inject_client=self.make_client())
         self.event_queue = []
         self.reset_data()  # Default setup.
 
@@ -57,7 +60,7 @@ class DiscordMockFixture:
             (m for g in client.guilds for m in g.members if m.id == id), None)
         return client
 
-    def make_guild(self, name='Mock Guild'):
+    def make_guild(self, client, name='Mock Guild'):
         """Returns a new Guild-like Mock."""
 
         guild = self.pytest_mocker.Mock(spec=discord.Guild, name='guild')
@@ -65,6 +68,7 @@ class DiscordMockFixture:
         guild.name = name
         guild.channels = []
         guild.members = []
+        guild.test_client = client
 
         guild.create_text_channel.side_effect = self.pytest_mocker.AsyncMock(
             side_effect=lambda *args, **kwargs:
@@ -99,7 +103,7 @@ class DiscordMockFixture:
         channel.topic = f'topic for {name}'
         channel.test_history = []  # The messages that history() will return.
 
-        async def get_history(limit=100, oldest_first=None):
+        async def history(limit=100, oldest_first=None):
             limit = len(channel.test_history) if limit is None else limit
             history = channel.test_history
             slice = history[:limit] if oldest_first else history[:-limit:-1]
@@ -113,11 +117,20 @@ class DiscordMockFixture:
             else:
                 raise discord.NotFound(None, f'message {id} not found')
 
-        channel.history.side_effect = get_history
+        async def send(content=None, embed=None):
+            message = self.make_message(
+                guild=guild, channel=channel, author=guild.test_client.user,
+                content=content, embed=embed)
+            channel.test_history.append(message)
+            return message
+
+        channel.history.side_effect = history
         channel.fetch_message.side_effect = fetch_message
+        channel.send.side_effect = send
         return channel
 
-    def make_message(self, guild, channel, author, content='Mock content'):
+    def make_message(self, guild, channel, author,
+                     content='Mock content', embed=None):
         """Returns a new Message-like Mock."""
 
         message = self.pytest_mocker.Mock(spec=discord.Message, name='message')
@@ -126,11 +139,34 @@ class DiscordMockFixture:
         message.channel = channel
         message.author = author
         message.content = content
+        message.attachments = []
+        message.embeds = [embed] if embed is not None else []
         message.reactions = []
         return message
 
+    def make_reaction(self, message, unicode):
+        reaction = self.pytest_mocker.Mock(
+            spec=discord.Reaction, name='reaction')
+        reaction.emoji = self.pytest_mocker.MagicMock(
+            spec=discord.PartialEmoji, name='reaction.emoji')
+        reaction.emoji.name = unicode
+        reaction.emoji.__str__.return_value = unicode
+        reaction.count = 0
+        reaction.me = False
+        reaction.message = message
+        reaction.test_users = {}
+
+        async def users(limit=None, oldest_first=None):
+            for i, m in enumerate(reaction.test_users.values()):
+                if limit is not None and i >= limit:
+                    break
+                yield m
+
+        reaction.users.side_effect = users
+        return reaction
+
     #
-    # Helper methods to update data and simulate notification events.
+    # Helper methods to update data and generate notification events.
     #
 
     def reset_data(self, guild_count=1, members_per_guild=1,
@@ -147,7 +183,7 @@ class DiscordMockFixture:
 
         self.context.client.guilds[:] = []  # Erase preexisting data.
         for gi in range(guild_count):
-            g = self.make_guild(name=f'Mock Guild {gi}')
+            g = self.make_guild(self.context.client, name=f'Mock Guild {gi}')
             self.context.client.guilds.append(g)
 
             for mi in range(members_per_guild):
@@ -194,36 +230,32 @@ class DiscordMockFixture:
         if delta not in (-1, +1):
             raise ValueError(f'reaction {unicode} delta {delta} not -1 or +1')
 
-        message_reaction = next(
+        reaction = next(
             (r for m in message.reactions if str(r.emoji) == unicode), None)
-        if message_reaction is None:
-            message_reaction = self.pytest_mocker.Mock(
-                spec=discord.Reaction, name='reaction')
-            message_reaction.emoji = self.pytest_mocker.MagicMock(
-                spec=discord.PartialEmoji, name='reaction.emoji')
-            message_reaction.emoji.name = unicode
-            message_reaction.emoji.__str__.return_value = unicode
-            message_reaction.count = 0
-            message_reaction.me = False
-            message_reaction.message = message
-            message.reactions.append(message_reaction)
-        if message_reaction.count + delta < 0:
-            raise ValueError(f'reaction {unicode} count dropped below 0')
-        if user.id == self.context.client.user.id:
-            message_reaction.me = (delta > 0)
-        message_reaction.count += delta
+        if reaction is None:
+            reaction = self.make_reaction(message, unicode)
+            message.reactions.append(reaction)
 
-        event = self.pytest_mocker.Mock(
-            spec=discord.RawReactionActionEvent, name='raw_reaction_event')
-        event.message_id = message.id
-        event.user_id = user.id
-        event.channel_id = message.channel.id
-        event.guild_id = message.guild.id
-        event.emoji = message_reaction.emoji
-        event.member = user
-        event.event_type = 'REACTION_ADD' if delta > 0 else 'REACTION_REMOVE'
-        self.queue_event(f'on_raw_{event.event_type.lower()}', event)
-        return message_reaction
+        old_count = len(reaction.test_users)
+        if delta > 0:
+            reaction.test_users[user.id] = user
+        elif delta < 0:
+            reaction.test_users.pop(user.id, None)
+
+        reaction.me = (self.context.client.user.id in reaction.test_users)
+        reaction.count = len(reaction.test_users)
+        if reaction.count != old_count:
+            event = self.pytest_mocker.Mock(
+                spec=discord.RawReactionActionEvent, name='raw_reaction_event')
+            event.message_id = message.id
+            event.user_id = user.id
+            event.channel_id = message.channel.id
+            event.guild_id = message.guild.id
+            event.emoji = reaction.emoji
+            event.member = user
+            event.event_type = 'REACTION_' + ('ADD' if delta > 0 else 'REMOVE')
+            self.queue_event(f'on_raw_{event.event_type.lower()}', event)
+            return reaction
 
     def sim_create_channel(self, guild, name, category=None,
                            position=None, topic=None, reason=None):

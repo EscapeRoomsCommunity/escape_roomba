@@ -1,4 +1,16 @@
+import argparse
 import asyncio
+import discord
+import logging
+import signal
+import os
+
+
+# Parser to use/extend for logging-related arguments.
+args = argparse.ArgumentParser(add_help=False)
+logging_args = args.add_argument_group('logging')
+logging_args.add_argument('--debug', action='store_true')
+logging_args.add_argument('--debug_discord', action='store_true')
 
 
 class Context:
@@ -9,12 +21,48 @@ class Context:
         client: discord.Client - access to the Discord API
     """
 
-    def __init__(self):
-        """Creates an empty Context. The caller must populate attributes."""
-        self.logger = None
-        self.client = None
+    def __init__(self, parsed_args, inject_client=None, **kwargs):
+        """Creates a Context.
+
+        Args:
+            parsed_args: argparse.Namespace - command line options
+            inject_client: discord.Client-like - replacement Discord client
+            **kwargs - other arguments for discord.Client
+
+        Attributes:
+            logger: logger.Logger - to use for bot-related logging
+            client: discord.Client - to use for Discord access
+        """
+
+        signal.signal(signal.SIGINT, signal.SIG_DFL)  # Sane ^C behavior.
+        logging.basicConfig(
+            level=logging.DEBUG if parsed_args.debug else logging.INFO,
+            format='%(asctime)s %(name)s [%(levelname)s] %(message)s',
+            datefmt='%m-%d %H:%M:%S')
+        logging.getLogger('discord').setLevel(
+            logging.DEBUG if parsed_args.debug_discord else logging.WARNING)
+        logging.captureWarnings(True)
+        self.logger = logging.getLogger('bot')
+
+        if inject_client is not None:
+            self.client = inject_client
+            self.bot_token = None  # Don't require for injected clients.
+        else:
+            self.client = discord.Client(**kwargs)
 
         self._event_listeners = {}  # Used by add_listener() (below).
+
+    def run_forever(self):
+        """Runs the Discord client's event loop with a bot token
+        from the system environment."""
+
+        try:
+            bot_token = os.environ['ESCAPE_ROOMBA_BOT_TOKEN']
+        except KeyError as e:
+            bot_logger.critical(f'No ${e.args[0]}! See README.md.')
+            raise SystemExit(1)
+
+        self.client.run(bot_token)
 
     # discord.Client only dispatches one callback per event type
     # (discordpy.readthedocs.io/en/latest/api.html#discord.Client.event);

@@ -2,7 +2,7 @@
 
 *Removing the dust bunnies from the Escape Rooms Discord, since 2020.*
 
-This is an experimental Discord bot to support the Escape Rooms Discord
+This is experimental Discord automation to support the Escape Rooms Discord
 community.
 
 - [Useful Resources](#useful-resources)
@@ -29,8 +29,8 @@ recommended).
 3. In this directory, run `poetry install`.
 4. If you installed direnv, in this directory, run `direnv allow`.
 
-You can now use `run_bot` (without direnv: `poetry run run_bot`) to start the
-program. However, you need a bot token in `$ESCAPE_ROOMBA_BOT_TOKEN` to
+You can now use `thread_bot` (without direnv: `poetry run thread_bot`) to run
+a bot.  However, you need a bot token in `$ESCAPE_ROOMBA_BOT_TOKEN` to
 actually run and connect to Discord. For the prod bot token, talk to egnor@.
 To make a test bot account to develop with, keep reading...
 
@@ -52,7 +52,7 @@ export ESCAPE_ROOMBA_BOT_TOKEN='your token here'
 ```
 (If you're not using direnv, set `$ESCAPE_ROOMBA_BOT_TOKEN` some other way.)
 To refresh direnv, `cd` out and back into this directory. Now you should be
-able to start `run_bot`, which should log an invite URL at startup:
+able to start `thread_bot`, which should log an invite URL at startup:
 
 ```
 09-11 11:51:17 root [INFO] Connected to Discord:
@@ -65,5 +65,5 @@ able to start `run_bot`, which should log an invite URL at startup:
 
 Follow the invite link to add this bot to a Discord server you administer
 (you may wish to create a new server for this purpose). You only need to
-do this once; henceforth, whenever the bot is running with that bot token,
+do this once; henceforth, whenever a bot is running with that bot token,
 it should be active on all Discord servers it was invited to.

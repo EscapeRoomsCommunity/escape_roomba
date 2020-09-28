@@ -1,7 +1,5 @@
 """Unit tests for context.Context."""
 
-import logging
-
 import pytest
 
 from escape_roomba.context import Context
