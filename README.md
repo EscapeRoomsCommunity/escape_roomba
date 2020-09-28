@@ -2,6 +2,11 @@
 
 *Removing the dust bunnies from the Escape Rooms Discord, since 2020.*
 
+<!-- Workflow name is defined in python-app.yml -->
+<!-- Workflow status badges documentation: -->
+<!-- https://docs.github.com/en/free-pro-team@latest/actions/managing-workflow-runs/adding-a-workflow-status-badge  -->
+![Escape Roomba](https://github.com/EscapeRoomsCommunity/escape_roomba/workflows/Escape%20Roomba/badge.svg)
+
 This is experimental Discord automation to support the Escape Rooms Discord
 community.
 
