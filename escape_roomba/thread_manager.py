@@ -205,7 +205,7 @@ class ThreadManager:
         # The change could be a relevant *intro* message update if:
         #   the message's channel is a thread channel AND
         #   ( there isn't a full set of intro messages OR
-        #     the update is for an existing intro messages )
+        #     the update is for an existing intro message )
         t = self._thread_by_channel.get(ci)
         if (t is not None and t.intro_messages is not None and (
                 len(t.intro_messages) < self._FETCH_INTRO or
