@@ -173,7 +173,7 @@ class ThreadManager:
         t = self._thread_by_channel.get(ci)
         if t is not None and t.relevant_intro_update(message_id=mi):
             _logger.debug('Fetching intro after update...\n'
-                         f'    {fobj(c=ci, m=message or mi)}')
+                          f'    {fobj(c=ci, m=message or mi)}')
             async with self._message_exclusive.locker(t.origin_message_id):
                 await t.async_refresh_intro()
 
@@ -242,14 +242,13 @@ class ThreadManager:
                 return
 
             assert recheck is thread  # If not removed, should be the same.
-            assert channel.id == thread.thread_channel.id
             ci, mi = thread.origin_channel_id, thread.origin_message_id
             del self._thread_by_channel[channel.id]
             del self._thread_by_origin[ci][mi]
             if _logger.isEnabledFor(logging.DEBUG):
                 _logger.debug('Thread channel was deleted:\n'
-                             f'    {fobj(c=channel)}\n'
-                             f'    origin: {fobj(c=ci, m=mi)}')
+                              f'    {fobj(c=channel)}\n'
+                              f'    origin: {fobj(c=ci, m=mi)}')
 
 
 def thread_bot_main():

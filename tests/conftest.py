@@ -70,9 +70,16 @@ class DiscordMockFixture:
         guild.members = []
         guild.test_client = client
 
-        guild.create_text_channel.side_effect = self.pytest_mocker.AsyncMock(
-            side_effect=lambda *args, **kwargs:
-                self.sim_create_channel(*args, guild=guild, **kwargs))
+        async def create_text_channel(*args, **kwargs):
+            return self.sim_create_channel(*args, guild=guild, **kwargs)
+
+        guild.create_text_channel.side_effect = create_text_channel
+        guild.get_channel = client.get_channel
+
+        # guild.create_text_channel.side_effect = self.pytest_mocker.AsyncMock(
+        #     side_effect=lambda *args, **kwargs:
+        #         self.sim_create_channel(*args, guild=guild, **kwargs))
+
         return guild
 
     def make_user(self, guild=None, name=None, discriminator='9999'):
@@ -183,7 +190,9 @@ class DiscordMockFixture:
 
         self.context.discord().guilds[:] = []  # Erase preexisting data.
         for gi in range(guild_count):
-            g = self.make_guild(self.context.discord(), name=f'Mock Guild {gi}')
+            g = self.make_guild(
+                self.context.discord(),
+                name=f'Mock Guild {gi}')
             self.context.discord().guilds.append(g)
 
             for mi in range(members_per_guild):

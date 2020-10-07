@@ -6,7 +6,7 @@ import discord.abc
 
 from escape_roomba.format_util import fid, fobj
 
-logger = logging.getLogger('bot')
+logger = logging.getLogger('bot.events')
 
 
 class EventLogger:
