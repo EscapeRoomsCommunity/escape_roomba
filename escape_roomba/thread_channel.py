@@ -97,15 +97,20 @@ class ThreadChannel:
 
         channel = client.get_channel(channel_id)
         if channel is None:
-            _logger.debug('No channel:\n'
+            _logger.debug('No channel for candidate:\n'
                           f'    {fobj(c=channel_id, m=message_id)}')
             return None
 
         try:
             message = await channel.fetch_message(message_id)
         except discord.errors.NotFound:
-            _logger.debug('Message fetch failed (NotFound):\n'
+            _logger.debug('Fetch failed for candidate (NotFound):\n'
                           f'    {fobj(c=channel, m=message_id)}')
+            return None
+
+        if message.author == channel.guild.me:
+            _logger.debug('Skipping candidate authored by this bot:\n'
+                          f'    {fobj(m=message)}')
             return None
 
         # Thread creation requires a 🧵 reaction without pile-on from this bot.
@@ -113,7 +118,7 @@ class ThreadChannel:
         rx = next((r for r in rxs if str(r.emoji) == _THREAD_EMOJI), None)
         users = rx and not rx.me and [u async for u in rx.users(limit=1)]
         if not users:
-            _logger.debug('Skipping message (no unhandled 🧵):\n'
+            _logger.debug('No unhandled 🧵 for candidate:\n'
                           f'    {fobj(m=message)}')
             return None
 
@@ -203,13 +208,13 @@ class ThreadChannel:
         channel = self.thread_channel.guild.get_channel(self.origin_channel_id)
         message = None
         if channel is None:
-            _logger.debug('No channel:\n'
+            _logger.debug('No channel for refresh:\n'
                           f'    {fobj(c=channel_id, m=message_id)}')
         else:
             try:
                 message = await channel.fetch_message(self.origin_message_id)
             except discord.errors.NotFound:
-                _logger.debug('Message fetch failed (NotFound):\n'
+                _logger.debug('Fetch failed for refresh (NotFound):\n'
                               f'    {fobj(c=channel, m=message_id)}')
 
         if message is None:  # The message has been deleted!
@@ -235,11 +240,12 @@ class ThreadChannel:
         rxs = message.reactions
         rx = next((r for r in rxs if str(r.emoji) == _THREAD_EMOJI), None)
         if _logger.isEnabledFor(logging.DEBUG):
-            rt = f'x{rx.count}{" w/me" if rx.me else ""}' if rx else 'None'
             _logger.debug(
-                f'Checking message ({fobj(c=self.thread_channel)}):\n'
-                f'    {fobj(m=message)}\n'
-                f'    🧵 reaction={rt}')
+                f'Refetched origin:\n'
+                f'    thread: ({fobj(c=self.thread_channel)}):\n'
+                f'    origin: {fobj(m=message)}\n'
+                f'    reaction: '
+                f'x{rx.count}{" w/me" if rx.me else ""}' if rx else 'None')
 
         # If 🧵 reactions are gone and the thread is empty, remove the channel.
         me = message.guild.me
@@ -275,6 +281,8 @@ class ThreadChannel:
             embed.set_author(name=who.display_name, icon_url=who.avatar_url)
             await self._async_post_intro(content='', embed=embed)
 
+        return self
+
     async def _async_post_intro(self, content, embed):
         """Internal method to add or edit the thread's intro message."""
 
@@ -284,9 +292,8 @@ class ThreadChannel:
 
         # Post or edit the intro if actual != desired.
         if old is None and len(self.intro_messages) >= _TRACK_INTRO_MESSAGES:
-            _logger.error(
-                'Another party sniped the first post!\n'
-                f'    {fobj(m=thread.intro_messages[0])}')
+            _logger.error('Another user sniped the first post!\n'
+                          f'    {fobj(m=thread.intro_messages[0])}')
         elif old is None and len(self.intro_messages) < _TRACK_INTRO_MESSAGES:
             m = await self.thread_channel.send(content=content, embed=embed)
             self.intro_messages.append(m)
@@ -296,9 +303,9 @@ class ThreadChannel:
             old_dict.get('author', {}).pop('proxy_icon_url', None)
             new_dict = embed.to_dict() if embed else {}
             if (old.content or '') != content or old_dict != new_dict:
-                _logger.debug(
-                    'Updating intro:\n'
-                    f'    old: [{old.content}] / {old_dict}\n'
-                    f'    new: [{content}] / {new_dict}')
+                _logger.debug('Updating intro:\n'
+                              f'    old: [{old.content}] / {old_dict}\n'
+                              f'    new: [{content}] / {new_dict}')
                 await old.edit(content=content, embed=embed)
-                _logger.info(f'Edited intro:\n    {fobj(m=old)}')
+                _logger.info('Edited intro:\n'
+                             f'    {fobj(m=old)}')
