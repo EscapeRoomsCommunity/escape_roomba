@@ -75,11 +75,6 @@ class DiscordMockFixture:
 
         guild.create_text_channel.side_effect = create_text_channel
         guild.get_channel = client.get_channel
-
-        # guild.create_text_channel.side_effect = self.pytest_mocker.AsyncMock(
-        #     side_effect=lambda *args, **kwargs:
-        #         self.sim_create_channel(*args, guild=guild, **kwargs))
-
         return guild
 
     def make_user(self, guild=None, name=None, discriminator='9999'):
