@@ -18,14 +18,15 @@ async def test_thread_creation(discord_mock):
     discord_mock.queue_event('on_ready')
     await discord_mock.async_dispatch_events()
 
-    message = discord_mock.context.client.guilds[0].channels[0].test_history[0]
+    client = discord_mock.context.discord()
+    message = client.guilds[0].channels[0].test_history[0]
     discord_mock.sim_reaction(
         message=message, unicode='🧵',
-        user=discord_mock.context.client.guilds[0].members[0], delta=+1)
+        user=client.guilds[0].members[0], delta=+1)
     await discord_mock.async_dispatch_events()
 
     # Make sure the thread channel was added.
-    assert '🧵' == discord_mock.context.client.guilds[0].channels[-1].name[0]
+    assert '🧵' == client.guilds[0].channels[-1].name[0]
 
 
 # TODO: Add more tests of more functionality.

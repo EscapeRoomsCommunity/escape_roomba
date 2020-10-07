@@ -13,22 +13,22 @@ def test_fid():
 
 def test_fobj(discord_mock):
     context = discord_mock.context
-    guild_id = context.client.guilds[0].id
-    channel_id = context.client.guilds[0].channels[0].id
-    user_id = context.client.guilds[0].members[0].id
+    guild_id = context.discord().guilds[0].id
+    channel_id = context.discord().guilds[0].channels[0].id
+    user_id = context.discord().guilds[0].members[0].id
 
     # Using fobj() with integers will call client lookup methods.
-    assert (fobj(context.client, g=guild_id, c=channel_id, u=user_id) ==
+    assert (fobj(context.discord(), g=guild_id, c=channel_id, u=user_id) ==
             '"Mock Guild 0" #mock-channel-0 (Mock Member 0#1000)')
-    context.client.get_guild.assert_called_with(guild_id)
-    context.client.get_channel.assert_called_with(channel_id)
-    context.client.get_user.assert_called_with(user_id)
+    context.discord().get_guild.assert_called_with(guild_id)
+    context.discord().get_channel.assert_called_with(channel_id)
+    context.discord().get_user.assert_called_with(user_id)
 
     # Verify fobj() with a Message-like object will use its members.
     m = discord_mock.make_message(
-        context.client.guilds[0],
-        context.client.guilds[0].channels[0],
-        context.client.guilds[0].members[0])
+        context.discord().guilds[0],
+        context.discord().guilds[0].channels[0],
+        context.discord().guilds[0].members[0])
     assert (fobj(client=None, m=m) ==
             '"Mock Guild 0" #mock-channel-0 (Mock Member 0#1000): '
             '"Mock content"')

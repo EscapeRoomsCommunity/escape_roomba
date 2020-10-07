@@ -14,12 +14,7 @@ logging_args.add_argument('--debug_discord', action='store_true')
 
 
 class Context:
-    """Global data shared by bot subfunctions.
-
-    Attributes:
-        logger: logging.Logger - for general reporting
-        client: discord.Client - access to the Discord API
-    """
+    """Global data shared by bot subfunctions."""
 
     def __init__(self, parsed_args, inject_client=None, **kwargs):
         """Creates a Context.
@@ -28,10 +23,6 @@ class Context:
             parsed_args: argparse.Namespace - command line options
             inject_client: discord.Client-like - replacement Discord client
             **kwargs - other arguments for discord.Client
-
-        Attributes:
-            logger: logger.Logger - to use for bot-related logging
-            client: discord.Client - to use for Discord access
         """
 
         signal.signal(signal.SIGINT, signal.SIG_DFL)  # Sane ^C behavior.
@@ -42,15 +33,17 @@ class Context:
         logging.getLogger('discord').setLevel(
             logging.DEBUG if parsed_args.debug_discord else logging.WARNING)
         logging.captureWarnings(True)
-        self.logger = logging.getLogger('bot')
 
         if inject_client is not None:
-            self.client = inject_client
-            self.bot_token = None  # Don't require for injected clients.
+            self._client = inject_client
         else:
-            self.client = discord.Client(**kwargs)
+            self._client = discord.Client(**kwargs)
 
         self._event_listeners = {}  # Used by add_listener() (below).
+
+    def discord(self):
+        """Returns the Discord API client."""
+        return self._client
 
     def run_forever(self):
         """Runs the Discord client's event loop with a bot token
@@ -59,10 +52,11 @@ class Context:
         try:
             bot_token = os.environ['ESCAPE_ROOMBA_BOT_TOKEN']
         except KeyError as e:
-            bot_logger.critical(f'No ${e.args[0]}! See README.md.')
+            logger = logging.getLogger('bot')
+            logger.critical(f'No ${e.args[0]}! See README.md.')
             raise SystemExit(1)
 
-        self.client.run(bot_token)
+        self._client.run(bot_token)
 
     # discord.Client only dispatches one callback per event type
     # (discordpy.readthedocs.io/en/latest/api.html#discord.Client.event);
@@ -94,7 +88,7 @@ class Context:
                 # For non-error events, run all listeners asynchronously.
                 async def run(*args, **kw):
                     await asyncio.gather(*[l(*args, **kw) for l in listeners])
-            setattr(self.client, event_name, run)
+            setattr(self._client, event_name, run)
 
         # Add to the listener list (captured by run() above).
         listeners.append(listener)

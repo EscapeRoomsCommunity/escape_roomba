@@ -181,10 +181,10 @@ class DiscordMockFixture:
             messages_per_channel - number of messages in each channel's history
         """
 
-        self.context.client.guilds[:] = []  # Erase preexisting data.
+        self.context.discord().guilds[:] = []  # Erase preexisting data.
         for gi in range(guild_count):
-            g = self.make_guild(self.context.client, name=f'Mock Guild {gi}')
-            self.context.client.guilds.append(g)
+            g = self.make_guild(self.context.discord(), name=f'Mock Guild {gi}')
+            self.context.discord().guilds.append(g)
 
             for mi in range(members_per_guild):
                 g.members.append(self.make_user(
@@ -213,7 +213,7 @@ class DiscordMockFixture:
         while self.event_queue:
             batch, self.event_queue = self.event_queue, []
             for event_name, args, kwargs in batch:
-                handler = getattr(self.context.client, event_name, None)
+                handler = getattr(self.context.discord(), event_name, None)
                 if handler is not None:
                     await handler(*args, **kwargs)
 
@@ -242,7 +242,7 @@ class DiscordMockFixture:
         elif delta < 0:
             reaction.test_users.pop(user.id, None)
 
-        reaction.me = (self.context.client.user.id in reaction.test_users)
+        reaction.me = (self.context.discord().user.id in reaction.test_users)
         reaction.count = len(reaction.test_users)
         if reaction.count != old_count:
             event = self.pytest_mocker.Mock(

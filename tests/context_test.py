@@ -22,12 +22,12 @@ async def test_add_listener(discord_mock):
     bar_listener.assert_not_called()
 
     # Dispatch events and verify that they are broadcast.
-    await discord_mock.context.client.on_foo(123)
+    await discord_mock.context.discord().on_foo(123)
     foo_listeners[0].assert_awaited_with(123)
     foo_listeners[1].assert_awaited_with(123)
     bar_listener.assert_not_called()
 
-    await discord_mock.context.client.on_bar('abc', 321)
+    await discord_mock.context.discord().on_bar('abc', 321)
     bar_listener.assert_awaited_with('abc', 321)
 
 
@@ -44,9 +44,9 @@ async def test_add_listener_methods(discord_mock):
     listeners._listen_bar.assert_not_called()
 
     # Dispatch events and verify that they are broadcast.
-    await discord_mock.context.client.on_foo(123)
+    await discord_mock.context.discord().on_foo(123)
     listeners._listen_foo.assert_awaited_with(123)
     listeners._listen_bar.assert_not_called()
 
-    await discord_mock.context.client.on_bar('abc', 321)
+    await discord_mock.context.discord().on_bar('abc', 321)
     listeners._listen_bar.assert_awaited_with('abc', 321)
