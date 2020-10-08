@@ -14,7 +14,7 @@ import escape_roomba.context
 
 
 class DiscordMockFixture:
-    """Class to generate Mocks for Discord client library objects.
+    """Class to generate Discord client library Mocks simulating a server.
     Tests can get an instance via the 'discord_mock' fixture (defined below).
 
     Attributes:
@@ -68,6 +68,7 @@ class DiscordMockFixture:
         guild.name = name
         guild.channels = []
         guild.members = []
+        guild.me = client.user
         guild.test_client = client
 
         async def create_text_channel(*args, **kwargs):
@@ -147,12 +148,13 @@ class DiscordMockFixture:
         return message
 
     def make_reaction(self, message, unicode):
-        reaction = self.pytest_mocker.Mock(
+        reaction = self.pytest_mocker.MagicMock(
             spec=discord.Reaction, name='reaction')
         reaction.emoji = self.pytest_mocker.MagicMock(
             spec=discord.PartialEmoji, name='reaction.emoji')
         reaction.emoji.name = unicode
         reaction.emoji.__str__.return_value = unicode
+        reaction.__str__.return_value = unicode
         reaction.count = 0
         reaction.me = False
         reaction.message = message
@@ -173,8 +175,7 @@ class DiscordMockFixture:
 
     def reset_data(self, guild_count=1, members_per_guild=1,
                    channels_per_guild=1, messages_per_channel=1):
-        """Populates a client (the default client if not given) with test data.
-        Removes any previously configured data.
+        """Clears the simulated server and populates it with test data.
 
         Args:
             guild_count - number of (simulated) guilds (servers) to set up
@@ -235,7 +236,7 @@ class DiscordMockFixture:
             raise ValueError(f'reaction {unicode} delta {delta} not -1 or +1')
 
         reaction = next(
-            (r for m in message.reactions if str(r.emoji) == unicode), None)
+            (r for r in message.reactions if str(r.emoji) == unicode), None)
         if reaction is None:
             reaction = self.make_reaction(message, unicode)
             message.reactions.append(reaction)

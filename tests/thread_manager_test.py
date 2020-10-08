@@ -1,9 +1,5 @@
 """Unit tests for thread_manager.ThreadManager."""
 
-import logging
-
-import discord
-import discord.abc
 import pytest
 
 from escape_roomba.context import Context

@@ -16,11 +16,8 @@ _logger = logging.getLogger('bot.thread')
 
 
 # TODO:
-# - manage visibility of thread channels (origin author + people who react?)
 # - allow specifying where people can/can't create threads?
-# - let people set thread channel name & topic (commands start with emoji?)
 # - archive thread channels once inactive for a while (or on request)
-# - use emoji (eg. 🔥) to indicate activity level in thread???
 
 class ThreadManager:
     """Allows users to spawn thread channels by adding a 🧵 reaction.
@@ -216,9 +213,9 @@ class ThreadManager:
 
         # Go through the history and check for unprocessed new threads.
         async for m in channel.history(limit=_RECENT_COUNT, oldest_first=False):
-            if not ThreadChannel.relevant_origin_update(message=m):
+            if ThreadChannel.relevant_origin_update(message=m):
+                ci, mi = m.channel.id, m.id
                 async with self._message_exclusive.locker(mi):
-                    ci, mi = message.channel.id, message.id
                     if self._thread_by_origin.get(ci, {}).get(mi) is None:
                         t = await ThreadChannel.async_maybe_create_from_origin(
                             self._context.discord(), ci, mi)

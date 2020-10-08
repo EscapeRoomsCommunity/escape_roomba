@@ -10,7 +10,7 @@ from escape_roomba.format_util import fobj
 
 _THREAD_EMOJI = '🧵'           # Reaction emoji trigger, and channel prefix.
 _MAX_CHANNEL_NAME_LENGTH = 20  # Maximum length of generated channel name.
-_TRACK_INTRO_MESSAGES = 2      # Number of channel messages to fetch.
+_CACHE_INTRO_MESSAGES = 2      # Track the first N messages in the thread.
 
 # Used to extract channel/message ID from existing thread channel topics.
 _TOPIC_PARSE_REGEX = regex.compile(
@@ -24,23 +24,32 @@ _logger = logging.getLogger('bot.thread')
 
 
 # TODO:
+# - manage visibility of thread channels (origin author + people who react?)
+# - let people set thread channel name & topic (commands start with emoji?)
+# - use emoji (eg. 🔥) to indicate activity level in thread???
 # - add unit test for this class specifically
 
 class ThreadChannel:
-    """Tracks and manages a thread channel created based on a 🧵 reaction.
-
-    Responds to updates of the origin message or in-thread messages;
+    """Tracks and manages a thread channel created based on a 🧵 reaction;
     creates (and deletes) the thread channel and its intro message embedding.
-    Callers must serialize calls to each ThreadChannel instance's methods."""
+    Callers must serialize calls to each ThreadChannel instance's methods.
+
+    Attributes:
+        thread_channel: discord.Channel - API object for the thread channel
+        thread_deleted: bool - True if the channel was deleted by user request
+        origin_channel_id: int - ID of the "root" message's channel
+        origin_message_id: int - ID of the "root" message
+    """
 
     def __init__(self, channel, origin_cid, origin_mid):
         """Sets up a ThreadChannel instance. This is normally invoked through
         maybe_attach_to_thread_channel() / async_maybe_create_from_origin()."""
 
         self.thread_channel = channel
+        self.thread_deleted = False
         self.origin_channel_id = origin_cid
         self.origin_message_id = origin_mid
-        self.intro_messages = None  # None for not loaded (vs [] for empty)
+        self._cached_intro = None  # First few messages (None = not loaded)
 
     @staticmethod
     def relevant_origin_update(message=None, emoji=None):
@@ -48,17 +57,17 @@ class ThreadChannel:
         indicates that an update may reflect a thread creation request
         (so async_maybe_create_from_origin() should be called)."""
 
-        return (
-            (emoji and str(emoji) == _THREAD_EMOJI) or
-            (message and (str(r) == _THREAD_EMOJI for r in message.reactions)))
+        return ((emoji and str(emoji) == _THREAD_EMOJI) or
+                (message and any(not r.me and str(r) == _THREAD_EMOJI
+                                 for r in message.reactions)))
 
     def relevant_intro_update(self, message_id):
         """Quick check that returns True if the given message ID is part of
         this thread's "intro" (so async_update_intro() should be called)."""
 
         return (
-            len(self.intro_messages) < _TRACK_INTRO_MESSAGES or
-            any(message_id == m.id for m in self.intro_messages or []))
+            len(self._cached_intro) < _CACHE_INTRO_MESSAGES or
+            any(message_id == m.id for m in self._cached_intro or []))
 
     @staticmethod
     def maybe_attach_to_thread_channel(channel):
@@ -166,44 +175,35 @@ class ThreadChannel:
         await message.add_reaction(rx)
 
         thread = ThreadChannel(thread_channel, origin_cid=ci, origin_mid=mi)
-        thread.intro_messages = []  # New channel has no messages yet!
-        await thread.async_refresh_origin()
+        thread._cached_intro = []  # New channel has no messages yet!
+        await thread._async_origin_updated(message)
         return thread
 
     async def async_refresh_intro(self):
         """Re-fetches the first few messages in the thread for tracking."""
 
-        if self.thread_channel is None:
-            return None  # Thread channel is already deleted.
-
-        old_len = len(self.intro_messages or [])
-        self.intro_messages = [
+        old_len = len(self._cached_intro or [])
+        self._cached_intro = [
             m async for m in self.thread_channel.history(
-                limit=_TRACK_INTRO_MESSAGES, oldest_first=True)]
+                limit=_CACHE_INTRO_MESSAGES, oldest_first=True)]
 
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.debug(
                 f'Fetched #{self.thread_channel.name} intro '
-                f'({old_len} => {len(self.intro_messages)}m):' +
-                ''.join(f'\n    {fobj(m=m)}' for m in self.intro_messages))
+                f'({old_len} => {len(self._cached_intro)}m):' +
+                ''.join(f'\n    {fobj(m=m)}' for m in self._cached_intro))
 
         # Intro messages are tracked to know if there are other channel posts,
         # which prevent channel deletion if the original 🧵 is removed.
         # If the intro set shrinks, re-check the origin to handle the corner
         # case where the 🧵 was removed and *then* all channel posts deleted.
-        if len(self.intro_messages) < old_len:
+        if len(self._cached_intro) < old_len:
             await self.refresh_origin()
 
     async def async_refresh_origin(self):
-        """Re-fetches the state of the thread's origin message updates
+        """Re-fetches the state of the thread's origin message and updates
         the thread (updating the intro to match, checking reaction count, etc).
-
-        Returns: self, or None if the thread channel was deleted as a result
-        of the update (origin message deleted, reactions removed, etc).
         """
-
-        if self.thread_channel is None:
-            return None  # Thread channel is already deleted.
 
         channel = self.thread_channel.guild.get_channel(self.origin_channel_id)
         message = None
@@ -217,21 +217,29 @@ class ThreadChannel:
                 _logger.debug('Fetch failed for refresh (NotFound):\n'
                               f'    {fobj(c=channel, m=message_id)}')
 
+        self._async_origin_updated(message)
+
+    async def _async_origin_updated(self, message):
+        """Updates the thread based on new origin message state.
+
+        Args:
+            message: discord.Message - New origin message (None if deleted)
+        """
+
         if message is None:  # The message has been deleted!
             me = self.thread_channel.guild.me
-            if (self.intro_messages is not None and
-                    not any(m for m in self.intro_messages if m.author != me)):
+            if (self._cached_intro is not None and
+                    not any(m for m in self._cached_intro if m.author != me)):
                 # The thread is empty (no added content), remove the channel.
                 _logger.info('Deleting channel (origin gone):\n'
                              f'    {fobj(c=self.thread_channel)}')
                 await self.thread_channel.delete()
-                return None
+                self.thread_deleted = True
 
             # The thread still has messages in it, edit intro but do not
             # delete.
             content = f'🧵 original message in <#{channel_id}> was **deleted**'
             await self._async_post_intro(content=content, embed=None)
-            return self
 
         gi, ci, mi = message.channel.guild.id, message.channel.id, message.id
         assert (ci, mi) == (self.origin_channel_id, self.origin_message_id)
@@ -250,16 +258,16 @@ class ThreadChannel:
         # If 🧵 reactions are gone and the thread is empty, remove the channel.
         me = message.guild.me
         if ((rx is None or (rx.count - rx.me) == 0) and
-            self.intro_messages is not None and
-                not any(m for m in self.intro_messages if m.author != me)):
+            self._cached_intro is not None and
+                not any(m for m in self._cached_intro if m.author != me)):
             _logger.info('Deleting channel (reactions removed):\n'
                          f'    {fobj(c=self.thread_channel)}')
             await self.thread_channel.delete()
             await message.remove_reaction(rx, me)
-            return None  # Signal that the thread was removed.
+            self.thread_deleted = True
 
         # Update the thread intro with a copy of the origin message.
-        if self.intro_messages is not None:
+        if self._cached_intro is not None:
             # Update intro message content and attached embed.
             who = message.author
             description = (message.content + '\n\xA0\n🧵 [original message]'
@@ -281,22 +289,25 @@ class ThreadChannel:
             embed.set_author(name=who.display_name, icon_url=who.avatar_url)
             await self._async_post_intro(content='', embed=embed)
 
-        return self
-
     async def _async_post_intro(self, content, embed):
-        """Internal method to add or edit the thread's intro message."""
+        """Internal method to add or edit the thread's intro message.
+
+        Args:
+            content: str - Body of intro message (can be '')
+            embed: discord.Embed - "Embedded" rich content (can be None)
+        """
 
         # Look for the first intro post by us.
         me = self.thread_channel.guild.me
-        old = next((m for m in self.intro_messages if m.author == me), None)
+        old = next((m for m in self._cached_intro if m.author == me), None)
 
         # Post or edit the intro if actual != desired.
-        if old is None and len(self.intro_messages) >= _TRACK_INTRO_MESSAGES:
+        if old is None and len(self._cached_intro) >= _CACHE_INTRO_MESSAGES:
             _logger.error('Another user sniped the first post!\n'
-                          f'    {fobj(m=thread.intro_messages[0])}')
-        elif old is None and len(self.intro_messages) < _TRACK_INTRO_MESSAGES:
+                          f'    {fobj(m=thread._cached_intro[0])}')
+        elif old is None and len(self._cached_intro) < _CACHE_INTRO_MESSAGES:
             m = await self.thread_channel.send(content=content, embed=embed)
-            self.intro_messages.append(m)
+            self._cached_intro.append(m)
             _logger.info(f'Posted intro:\n    {fobj(m=m)}')
         elif old is not None:
             old_dict = old.embeds[0].to_dict() if old.embeds else {}
