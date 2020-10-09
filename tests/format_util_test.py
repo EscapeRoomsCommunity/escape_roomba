@@ -26,9 +26,8 @@ def test_fobj(discord_mock):
 
     # Verify fobj() with a Message-like object will use its members.
     m = discord_mock.make_message(
-        context.discord().guilds[0],
-        context.discord().guilds[0].channels[0],
-        context.discord().guilds[0].members[0])
+        channel=context.discord().guilds[0].channels[0],
+        author=context.discord().guilds[0].members[0])
     assert (fobj(client=None, m=m) ==
             '"Mock Guild 0" #mock-channel-0 (Mock Member 0#1000): '
             '"Mock content"')

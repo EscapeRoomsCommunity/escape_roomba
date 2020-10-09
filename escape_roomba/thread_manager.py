@@ -151,28 +151,30 @@ class ThreadManager:
                 ThreadChannel.relevant_origin_update(
                     emoji=emoji, message=message)):
             async with self._message_exclusive.locker(mi):  # Lock & refresh.
-                t = self._thread_by_origin.get(ci, {}).get(mi)
-                if t is not None:  # Message is an existing thread origin.
-                    if not await t.async_refresh_origin():  # Thread deleted!
+                thread = self._thread_by_origin.get(ci, {}).get(mi)
+                if thread is not None:  # Message is an existing thread origin.
+                    await thread.async_refresh_origin()
+                    if thread.is_deleted:  # Thread deleted!
                         del self._thread_by_origin[ci][mi]
-                        del self._thread_by_channel[t.thread_channel.id]
+                        del self._thread_by_channel[thread.thread_channel.id]
                 else:  # No thread based on this message; maybe make one?
-                    t = await ThreadChannel.async_maybe_create_from_origin(
+                    thread = await ThreadChannel.async_maybe_create_from_origin(
                         self._context.discord(), ci, mi)
-                    if t is not None:  # New thread!
-                        self._thread_by_origin.setdefault(ci, {})[mi] = t
-                        self._thread_by_channel[t.thread_channel.id] = t
+                    if thread is not None:  # New thread!
+                        thread_channel_id = thread.thread_channel.id
+                        self._thread_by_origin.setdefault(ci, {})[mi] = thread
+                        self._thread_by_channel[thread_channel_id] = thread
 
         # The change could be a relevant *intro* message update if:
         #   the message's channel is a thread channel AND
         #   ( there isn't a full set of intro messages OR
         #     the update is for an existing intro message )
-        t = self._thread_by_channel.get(ci)
-        if t is not None and t.relevant_intro_update(message_id=mi):
+        thread = self._thread_by_channel.get(ci)
+        if thread is not None and thread.relevant_intro_update(message_id=mi):
             _logger.debug('Fetching intro after update...\n'
                           f'    {fobj(c=ci, m=message or mi)}')
             async with self._message_exclusive.locker(t.origin_message_id):
-                await t.async_refresh_intro()
+                await thread.async_refresh_intro()
 
     async def _async_channel_update(self, channel):
         """Examines channel metadata; registers existing thread channels."""
@@ -200,7 +202,8 @@ class ThreadManager:
             self._thread_by_origin.setdefault(ci, {})[mi] = thread
             self._thread_by_channel[channel.id] = thread
             await thread.async_refresh_intro()
-            if not await thread.async_refresh_origin():  # Deleted already!
+            await thread.async_refresh_origin()
+            if thread.is_deleted:  # Deleted already!
                 del self._thread_by_origin[ci][mi]
                 del self._thread_by_channel[channel.id]
 

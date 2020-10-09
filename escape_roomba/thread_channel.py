@@ -36,9 +36,9 @@ class ThreadChannel:
 
     Attributes:
         thread_channel: discord.Channel - API object for the thread channel
-        thread_deleted: bool - True if the channel was deleted by user request
         origin_channel_id: int - ID of the "root" message's channel
         origin_message_id: int - ID of the "root" message
+        is_deleted: bool - True if the channel was deleted by user request
     """
 
     def __init__(self, channel, origin_cid, origin_mid):
@@ -46,9 +46,9 @@ class ThreadChannel:
         maybe_attach_to_thread_channel() / async_maybe_create_from_origin()."""
 
         self.thread_channel = channel
-        self.thread_deleted = False
         self.origin_channel_id = origin_cid
         self.origin_message_id = origin_mid
+        self.is_deleted = False
         self._cached_intro = None  # First few messages (None = not loaded)
 
     @staticmethod
@@ -217,7 +217,7 @@ class ThreadChannel:
                 _logger.debug('Fetch failed for refresh (NotFound):\n'
                               f'    {fobj(c=channel, m=message_id)}')
 
-        self._async_origin_updated(message)
+        await self._async_origin_updated(message)
 
     async def _async_origin_updated(self, message):
         """Updates the thread based on new origin message state.
@@ -234,7 +234,7 @@ class ThreadChannel:
                 _logger.info('Deleting channel (origin gone):\n'
                              f'    {fobj(c=self.thread_channel)}')
                 await self.thread_channel.delete()
-                self.thread_deleted = True
+                self.is_deleted = True
 
             # The thread still has messages in it, edit intro but do not
             # delete.
@@ -264,7 +264,7 @@ class ThreadChannel:
                          f'    {fobj(c=self.thread_channel)}')
             await self.thread_channel.delete()
             await message.remove_reaction(rx, me)
-            self.thread_deleted = True
+            self.is_deleted = True
 
         # Update the thread intro with a copy of the origin message.
         if self._cached_intro is not None:
