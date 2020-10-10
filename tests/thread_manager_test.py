@@ -1,9 +1,5 @@
 """Unit tests for thread_manager.ThreadManager."""
 
-import logging
-
-import discord
-import discord.abc
 import pytest
 
 from escape_roomba.context import Context
@@ -19,7 +15,7 @@ async def test_thread_creation(discord_mock):
     await discord_mock.async_dispatch_events()
 
     client = discord_mock.context.discord()
-    message = client.guilds[0].channels[0].test_history[0]
+    message = client.guilds[0].channels[0].history_for_mock[0]
     discord_mock.sim_reaction(
         message=message, unicode='🧵',
         user=client.guilds[0].members[0], delta=+1)

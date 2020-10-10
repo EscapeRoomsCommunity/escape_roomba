@@ -3,18 +3,21 @@ docs.pytest.org/en/stable/fixture.html#conftest-py-sharing-fixture-functions.
 """
 
 import argparse
-import collections
+import copy
 import logging
 
 import discord
-import discord.abc
 import pytest
+import regex
 
+from escape_roomba.format_util import fobj
 import escape_roomba.context
+
+logger_ = logging.getLogger('bot.mock')
 
 
 class DiscordMockFixture:
-    """Class to generate Mocks for Discord client library objects.
+    """Class to generate Discord client library Mocks simulating a server.
     Tests can get an instance via the 'discord_mock' fixture (defined below).
 
     Attributes:
@@ -58,6 +61,7 @@ class DiscordMockFixture:
             (c for g in client.guilds for c in g.channels if c.id == id), None)
         client.get_user.side_effect = lambda id: next(
             (m for g in client.guilds for m in g.members if m.id == id), None)
+        logger_.debug('make_client')
         return client
 
     def make_guild(self, client, name='Mock Guild'):
@@ -68,13 +72,14 @@ class DiscordMockFixture:
         guild.name = name
         guild.channels = []
         guild.members = []
-        guild.test_client = client
+        guild.me = client.user
 
         async def create_text_channel(*args, **kwargs):
-            return self.sim_create_channel(*args, guild=guild, **kwargs)
+            return self.sim_add_channel(*args, guild=guild, **kwargs)
 
         guild.create_text_channel.side_effect = create_text_channel
         guild.get_channel = client.get_channel
+        logger_.debug(f'make_guild:\n    {fobj(g=guild)}')
         return guild
 
     def make_user(self, guild=None, name=None, discriminator='9999'):
@@ -91,9 +96,12 @@ class DiscordMockFixture:
             user.name = name or 'Mock Member'
             user.guild = guild
 
+        logger_.debug(f'make_user:\n    {fobj(u=user)}')
         return user
 
-    def make_text_channel(self, guild, name='mock-channel'):
+    def make_text_channel(self, guild, name='mock-channel', category=None,
+                          position=None, topic=None, reason=None):
+        # TODO: Handle all the other arguments, mangle the name...
         """Returns a new TextChannel-like Mock."""
 
         channel = self.pytest_mocker.Mock(
@@ -102,64 +110,85 @@ class DiscordMockFixture:
         channel.guild = guild
         channel.type = discord.ChannelType.text
         channel.name = name
-        channel.topic = f'topic for {name}'
-        channel.test_history = []  # The messages that history() will return.
+        channel.topic = topic or f'topic for {name}'
+        channel.history_for_mock = []  # Messages that history() will return.
+        # TODO: Handle category, position, and reason.
 
         async def history(limit=100, oldest_first=None):
-            limit = len(channel.test_history) if limit is None else limit
-            history = channel.test_history
+            limit = len(channel.history_for_mock) if limit is None else limit
+            history = channel.history_for_mock
             slice = history[:limit] if oldest_first else history[:-limit:-1]
             for m in slice:
                 yield m
 
         async def fetch_message(id):
-            found = next((m for m in channel.test_history if m.id == id), None)
-            if found:
-                return found
-            else:
+            m = next((m for m in channel.history_for_mock if m.id == id), None)
+            if not m:
                 raise discord.NotFound(None, f'message {id} not found')
+            return m
 
         async def send(content=None, embed=None):
-            message = self.make_message(
-                guild=guild, channel=channel, author=guild.test_client.user,
-                content=content, embed=embed)
-            channel.test_history.append(message)
-            return message
+            return self.sim_add_message(
+                channel=channel, author=guild.me, content=content, embed=embed)
 
         channel.history.side_effect = history
         channel.fetch_message.side_effect = fetch_message
         channel.send.side_effect = send
+        logger_.debug(f'make_channel:\n    {fobj(c=channel)}')
         return channel
 
-    def make_message(self, guild, channel, author,
-                     content='Mock content', embed=None):
+    def make_message(
+            self,
+            channel,
+            author,
+            content='Mock content',
+            embed=None):
         """Returns a new Message-like Mock."""
 
         message = self.pytest_mocker.Mock(spec=discord.Message, name='message')
         message.id = self.unique_id()
-        message.guild = guild
+        message.guild = channel.guild
         message.channel = channel
         message.author = author
         message.content = content
         message.attachments = []
         message.embeds = [embed] if embed is not None else []
         message.reactions = []
+
+        async def edit(*args, **kwargs):
+            self.sim_edit_message(message, *args, **kwargs)
+
+        async def add_reaction(emoji):
+            self.sim_reaction(message, str(emoji), message.guild.me, +1)
+
+        async def remove_reaction(emoji, member):
+            self.sim_reaction(message, str(emoji), message.guild.me, -1)
+
+        message.edit.side_effect = edit
+        message.add_reaction.side_effect = add_reaction
+        message.remove_reaction.side_effect = remove_reaction
+        logger_.debug(f'make_message:\n    {fobj(m=message)}')
         return message
 
     def make_reaction(self, message, unicode):
-        reaction = self.pytest_mocker.Mock(
+        logger_.debug(f'make_reaction: {unicode}\n    on: {fobj(m=message)}')
+        assert isinstance(unicode, str)
+        assert regex.fullmatch(r'\p{Emoji}', unicode)
+
+        reaction = self.pytest_mocker.MagicMock(
             spec=discord.Reaction, name='reaction')
         reaction.emoji = self.pytest_mocker.MagicMock(
             spec=discord.PartialEmoji, name='reaction.emoji')
         reaction.emoji.name = unicode
         reaction.emoji.__str__.return_value = unicode
+        reaction.__str__.return_value = unicode
         reaction.count = 0
         reaction.me = False
         reaction.message = message
-        reaction.test_users = {}
+        reaction.users_for_mock = {}
 
         async def users(limit=None, oldest_first=None):
-            for i, m in enumerate(reaction.test_users.values()):
+            for i, m in enumerate(reaction.users_for_mock.values()):
                 if limit is not None and i >= limit:
                     break
                 yield m
@@ -173,8 +202,7 @@ class DiscordMockFixture:
 
     def reset_data(self, guild_count=1, members_per_guild=1,
                    channels_per_guild=1, messages_per_channel=1):
-        """Populates a client (the default client if not given) with test data.
-        Removes any previously configured data.
+        """Clears the simulated server and populates it with test data.
 
         Args:
             guild_count - number of (simulated) guilds (servers) to set up
@@ -183,43 +211,86 @@ class DiscordMockFixture:
             messages_per_channel - number of messages in each channel's history
         """
 
+        logger_.debug(f'reset_data: #g={guild_count} #u/g={members_per_guild} '
+                      f'#c/g={channels_per_guild} #m/c={messages_per_channel}')
+
         self.context.discord().guilds[:] = []  # Erase preexisting data.
         for gi in range(guild_count):
-            g = self.make_guild(
-                self.context.discord(),
-                name=f'Mock Guild {gi}')
-            self.context.discord().guilds.append(g)
+            guild = self.make_guild(
+                self.context.discord(), name=f'Mock Guild {gi}')
+            self.context.discord().guilds.append(guild)
 
             for mi in range(members_per_guild):
-                g.members.append(self.make_user(
-                    g, name=f'Mock Member {mi}', discriminator=1000 + mi))
+                guild.members.append(self.make_user(
+                    guild, name=f'Mock Member {mi}', discriminator=1000 + mi))
             for ci in range(channels_per_guild):
                 name = f'mock-channel-{ci}'
-                c = self.make_text_channel(g, name=name)
-                g.channels.append(c)
+                channel = self.make_text_channel(guild, name=name)
+                guild.channels.append(channel)
                 for mi in range(messages_per_channel):
                     # Need member for message author.
-                    assert len(g.members) > 0
-                    c.test_history.append(self.make_message(
-                        g, c, g.members[mi % len(g.members)],
+                    assert len(guild.members) > 0
+                    channel.history_for_mock.append(self.make_message(
+                        channel, guild.members[mi % len(guild.members)],
                         f'Mock message {mi} in #mock-channel-{ci}'))
+
+        logger_.debug('reset_data done')
 
     def queue_event(self, event_name, *args, **kwargs):
         """Queues an event to be sent to registered listeners."""
 
-        if not event_name.startswith('on_'):
-            raise ValueError(f"event '{event_name}' doesn't start with 'on_'")
+        logger_.debug(f'queue_event: {event_name}')
+        assert event_name.startswith('on_')
         self.event_queue.append((event_name, args, kwargs))
 
     async def async_dispatch_events(self):
         """Sends all queued events to registered handlers."""
 
+        logger_.debug(f'async_dispatch_event: {len(self.event_queue)} events')
         while self.event_queue:
             batch, self.event_queue = self.event_queue, []
             for event_name, args, kwargs in batch:
                 handler = getattr(self.context.discord(), event_name, None)
+                logger_.debug(f'async_dispatch_event: {event_name}'
+                              f'{"" if handler else " [unhandled]"}]')
                 if handler is not None:
                     await handler(*args, **kwargs)
+            logger_.debug('async_dispatch_event: batch done, '
+                          f'{len(self.event_queue)} added')
+
+    def sim_add_message(self, channel, **kwargs):
+        """Simulates a message post and queues notification events.
+
+        Args:
+            channel - the channel to post to
+            message - the message to post
+        """
+
+        message = self.make_message(channel=channel, **kwargs)
+        logger_.debug(f'sim_add_message:\n    {fobj(m=message)}')
+        channel.history_for_mock.append(message)
+        self.queue_event(f'on_message', message)
+        return message
+
+    def sim_edit_message(self, message, content=None, embed=None):
+        edited = copy.copy(message)
+        edited.content = content
+        edited.embeds = [embed] if embed is not None else []
+        logger_.debug('sim_edit_message:\n'
+                      f'    before: {fobj(m=message)}\n'
+                      f'    after: {fobj(m=edited)}')
+
+        history = message.channel.history_for_mock
+        history[:] = [edited if m.id == message.id else m for m in history]
+
+        event = self.pytest_mocker.Mock(
+            spec=discord.RawMessageUpdateEvent, name='raw_edit_event')
+        event.message_id = message.id
+        event.channel_id = message.channel.id
+        event.data = None  # TODO: Fill in if needed.
+        event.cached_message = message
+        self.queue_event('on_raw_message_edit', event)
+        self.queue_event('on_message_edit', message, edited)
 
     def sim_reaction(self, message, unicode, user, delta):
         """Simulates an emoji reaction change and queues notification events.
@@ -231,23 +302,27 @@ class DiscordMockFixture:
             delta - +1 to add, -1 to remove
         """
 
-        if delta not in (-1, +1):
-            raise ValueError(f'reaction {unicode} delta {delta} not -1 or +1')
+        logger_.debug(f'sim_reaction: {delta:+d} {unicode}\n'
+                      f'    by: {fobj(u=user)}\n'
+                      f'    on: {fobj(m=message)}')
+        assert isinstance(unicode, str)
+        assert regex.fullmatch(r'\p{Emoji}', unicode)
+        assert delta in (-1, +1)
 
         reaction = next(
-            (r for m in message.reactions if str(r.emoji) == unicode), None)
+            (r for r in message.reactions if str(r.emoji) == unicode), None)
         if reaction is None:
             reaction = self.make_reaction(message, unicode)
             message.reactions.append(reaction)
 
-        old_count = len(reaction.test_users)
+        old_count = len(reaction.users_for_mock)
         if delta > 0:
-            reaction.test_users[user.id] = user
+            reaction.users_for_mock[user.id] = user
         elif delta < 0:
-            reaction.test_users.pop(user.id, None)
+            reaction.users_for_mock.pop(user.id, None)
 
-        reaction.me = (self.context.discord().user.id in reaction.test_users)
-        reaction.count = len(reaction.test_users)
+        reaction.me = (message.guild.me.id in reaction.users_for_mock)
+        reaction.count = len(reaction.users_for_mock)
         if reaction.count != old_count:
             event = self.pytest_mocker.Mock(
                 spec=discord.RawReactionActionEvent, name='raw_reaction_event')
@@ -259,15 +334,17 @@ class DiscordMockFixture:
             event.member = user
             event.event_type = 'REACTION_' + ('ADD' if delta > 0 else 'REMOVE')
             self.queue_event(f'on_raw_{event.event_type.lower()}', event)
-            return reaction
 
-    def sim_create_channel(self, guild, name, category=None,
-                           position=None, topic=None, reason=None):
+        logger_.debug('sim_reaction done:\n    ' + ' '.join(
+            f'{str(r.emoji)}x{r.count}{"*" if r.me else ""}'
+            for r in message.reactions))
+        return reaction
+
+    def sim_add_channel(self, guild, name, *args, **kwargs):
         """Simulates guild.create_text_channel() and queues events."""
 
-        channel = self.make_text_channel(guild, name)
-        channel.topic = topic
-        # TODO: Handle all the other arguments, mangle the name...
+        logger_.debug(f'sim_add_channel: #{name}')
+        channel = self.make_text_channel(guild, name, *args, **kwargs)
         guild.channels.append(channel)
         self.queue_event('on_guild_channel_create', channel)
         return channel
