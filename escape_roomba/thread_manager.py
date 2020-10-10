@@ -173,7 +173,7 @@ class ThreadManager:
         if thread is not None and thread.relevant_intro_update(message_id=mi):
             _logger.debug('Fetching intro after update...\n'
                           f'    {fobj(c=ci, m=message or mi)}')
-            async with self._message_exclusive.locker(t.origin_message_id):
+            async with self._message_exclusive.locker(thread.origin_message_id):
                 await thread.async_refresh_intro()
 
     async def _async_channel_update(self, channel):
