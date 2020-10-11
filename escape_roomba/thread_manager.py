@@ -171,8 +171,6 @@ class ThreadManager:
         #     the update is for an existing intro message )
         thread = self._thread_by_channel.get(ci)
         if thread is not None and thread.relevant_intro_update(message_id=mi):
-            _logger.debug('Fetching intro after update...\n'
-                          f'    {fobj(c=ci, m=message or mi)}')
             async with self._message_exclusive.locker(thread.origin_message_id):
                 await thread.async_refresh_intro()
 
@@ -246,25 +244,30 @@ class ThreadManager:
             del self._thread_by_channel[channel.id]
             del self._thread_by_origin[ci][mi]
             if _logger.isEnabledFor(logging.DEBUG):
-                _logger.debug('Thread channel was deleted:\n'
-                              f'    {fobj(c=channel)}\n'
-                              f'    origin: {fobj(c=ci, m=mi)}')
+                _logger.debug(f'\n    Thread gone: {fobj(c=channel)}'
+                              f'\n      Origin: {fobj(c=ci, m=mi)}')
 
 
 def thread_bot_main():
     """Main entry point from 'thread_bot' wrapper script (pyproject.yaml)."""
 
     import argparse
+    import signal
 
     import escape_roomba.context
     import escape_roomba.event_logger
 
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     arg_parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
     context = escape_roomba.context.Context(
         parsed_args=arg_parser.parse_args(),
         max_messages=None,
-        fetch_offline_members=False,
-        guild_subscriptions=False)
+        chunk_guilds_at_startup=True,  # For reliable permissions access.
+        intents=discord.Intents(
+            guilds=True,
+            members=True,  # Needed for permission processing.
+            guild_messages=True,
+            guild_reactions=True))
 
     escape_roomba.event_logger.EventLogger(context)
     escape_roomba.thread_manager.ThreadManager(context)

@@ -46,6 +46,7 @@ Follow the
 instructions from the discord.py docs.
 * Name your test bot whatever you want, like "Jaxlyn's Test Bot".
 * No need to make it a "Public Bot".
+* _Do_ enable "Server Members Intent" (in "Bot" settings).
 * Do _not_ check "Require OAuth2 Public Grant".
 * Copy the *Token* (_not_ the ~~*Client Secret*~~).
 
