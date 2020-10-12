@@ -19,7 +19,7 @@ def test_fobj(discord_mock):
 
     # Using fobj() with integers will call client lookup methods.
     assert (fobj(context.discord(), g=guild_id, c=channel_id, u=user_id) ==
-            '<@Mock Member 0#1000> #mock-channel-0 (Mock Guild 0)')
+            '<@Mock Member 0#1000> #mock-channel-0 on "Mock Guild 0"')
     context.discord().get_guild.assert_called_with(guild_id)
     context.discord().get_channel.assert_called_with(channel_id)
     context.discord().get_user.assert_called_with(user_id)
@@ -29,14 +29,14 @@ def test_fobj(discord_mock):
         channel=context.discord().guilds[0].channels[0],
         author=context.discord().guilds[0].members[0])
     assert (fobj(client=None, m=m) ==
-            '"Mock content" '
-            '<@Mock Member 0#1000> #mock-channel-0 (Mock Guild 0)')
+            '"Mock content" by '
+            '<@Mock Member 0#1000> in #mock-channel-0 on "Mock Guild 0"')
 
     # Verify fobj() will truncate content and normalize whitespace.
     m.content = '   somewhat longer\nmessage content text string here'
     assert (fobj(client=None, m=m) ==
-            '"somewhat longer ..." '
-            '<@Mock Member 0#1000> #mock-channel-0 (Mock Guild 0)')
+            '"somewhat longer ..." by '
+            '<@Mock Member 0#1000> in #mock-channel-0 on "Mock Guild 0"')
 
     # Verify fobj() with permissions-type objects.
     permissions = discord.Permissions(stream=True, read_messages=True)

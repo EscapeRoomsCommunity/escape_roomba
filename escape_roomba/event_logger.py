@@ -131,16 +131,16 @@ class EventLogger:
                       self._fobj(g=p.guild_id, c=p.channel_id, m=p.message_id))
 
     async def _debug_on_guild_channel_delete(self, c):
-        _logger.debug(f'Delete {self._fobj(c=c)}')
+        _logger.debug(f'\n    Delete {self._fobj(c=c)}')
 
     async def _debug_on_guild_channel_create(self, c):
-        _logger.debug(f'Create {self._fobj(c=c)}')
+        _logger.debug(f'\n    Create {self._fobj(c=c)}')
 
     async def _debug_on_guild_channel_update(self, b, a):
-        _logger.debug(f'Update {self._fobj(c=b)}')
+        _logger.debug(f'\n    Update {self._fobj(c=b)}')
 
     async def _debug_on_guild_available(self, g):
-        _logger.debug(f'Server available {self._fobj(g=g)}')
+        _logger.debug(f'Guild avail {self._fobj(g=g)}')
 
     async def _debug_on_guild_unavailable(self, g):
-        _logger.debug(f'Server unavailable {self._fobj(g=g)}')
+        _logger.debug(f'Guild unavail {self._fobj(g=g)}')

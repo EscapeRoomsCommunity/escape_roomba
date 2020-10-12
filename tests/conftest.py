@@ -3,8 +3,8 @@ docs.pytest.org/en/stable/fixture.html#conftest-py-sharing-fixture-functions.
 """
 
 import argparse
-import copy
 import logging
+from copy import copy
 
 import discord
 import pytest
@@ -293,7 +293,7 @@ class DiscordMockFixture:
         return message
 
     def sim_edit_message(self, message, content=None, embed=None):
-        edited = copy.copy(message)
+        edited = copy(message)
         edited.content = content
         edited.embeds = [embed] if embed is not None else []
         logger_.debug('sim_edit_message:\n'
@@ -369,7 +369,9 @@ class DiscordMockFixture:
             channel.position = len(guild.channels)
         guild.channels.insert(channel.position, channel)
         for i in range(channel.position + 1, len(guild.channels)):
+            old = copy(guild.channels[i])
             guild.channels[i].position = i
+            self.queue_event('on_guild_channel_update', old, guild.channels[i])
         self.queue_event('on_guild_channel_create', channel)
         return channel
 

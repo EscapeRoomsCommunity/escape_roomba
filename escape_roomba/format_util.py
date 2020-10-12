@@ -85,6 +85,9 @@ def fobj(client=None, g=None, c=None, u=None, r=None, m=None, p=None):
     elif m:
         out.append(fid(m).replace('<', '<m:'))
 
+    if m and u:
+        out.append('by')
+
     if hasattr(u, 'name') and hasattr(u, 'discriminator'):  # User/Member-like
         out.append(f'<@{u.name}#{u.discriminator}>')
     elif hasattr(u, 'name'):
@@ -97,17 +100,30 @@ def fobj(client=None, g=None, c=None, u=None, r=None, m=None, p=None):
     elif r:
         out.append(fid(r).replace('<', '<@&'))
 
+    if m and c:
+        out.append('in')
+
+    # Channel attributes. (Don't show position when printing a message.)
+    if hasattr(c, 'position') and not (m or u or r):  # GuildChannel-like
+        out.append(f'(p{c.position})')
+    if hasattr(c, 'type') and c.type != discord.ChannelType.text:
+        out.append(f'[{str(c.type)[:3]}]')
+
     if hasattr(c, 'me') and hasattr(c, 'recipient'):  # DMChannel-like
         out.append(f'[{c.me} => {c.recipient}]')
     elif hasattr(c, 'me') and hasattr(c, 'recipients'):  # GroupChannel-like
         out.append(f'[{c.me} => {", ".join(r for r in c.recipients)}]')
     elif hasattr(c, 'name'):  # GuildChannel-like
-        out.append(f'#{c.name}')
+        is_cat = (getattr(c, 'type', None) == discord.ChannelType.category)
+        out.append(f'"{c.name}"' if is_cat else f'#{c.name}')
     elif c:
         out.append(fid(c).replace('<', '<#'))
 
+    if (m or r or u or c) and g:
+        out.append('on')
+
     if hasattr(g, 'name'):  # Guild-like
-        out.append(f'({g.name})')
+        out.append(f'"{g.name}"')
     elif g:
         out.append(fid(g).replace('<', '<g:'))
 
