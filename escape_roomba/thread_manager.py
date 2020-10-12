@@ -126,8 +126,8 @@ class ThreadManager:
     # of the thread (or thread-to-be) to avoid races.
     #
 
-    async def _async_message_update(self, channel_id=None, channel=None,
-                                    message=None, message_id=None, emoji=None):
+    async def _async_message_update(self, channel_id=None, message_id=None,
+                                    message=None, emoji=None):
         """If an update looks relevant, acquires a lock, re-fetches, and
         processes a message. Requires one of channel_id/message_id or message.
 
@@ -246,6 +246,11 @@ class ThreadManager:
             if _logger.isEnabledFor(logging.DEBUG):
                 _logger.debug(f'\n    Thread gone: {fobj(c=channel)}'
                               f'\n      Origin: {fobj(c=ci, m=mi)}')
+
+        # Update threads originating in the deleted channel.
+        for smi in list(self._thread_by_origin.get(channel.id, {}).keys()):
+            await self._async_message_update(
+                channel_id=channel.id, message_id=smi)
 
 
 def thread_bot_main():

@@ -13,13 +13,18 @@ _THREAD_EMOJI = '🧵'           # Reaction emoji trigger, and channel prefix.
 _MAX_CHANNEL_NAME_LENGTH = 20  # Maximum length of generated channel name.
 _CACHE_INTRO_MESSAGES = 2      # Track the first N messages in the thread.
 
-# Used to extract channel/message ID from existing thread channel topics.
+# Extracts channel/message ID from existing thread channel topics.
 _TOPIC_PARSE_REGEX = regex.compile(
     r'.*\[(?:id=)?(<#[0-9]+>|[0-9a-f]+)/([0-9a-f]+)\][\s.]*', regex.I)
 
-# Used to strip things when generating Discord channel names from text.
+# Strips text that can't be used in channel names.
 _CHANNEL_CLEANUP_REGEX = regex.compile(
     r'([^\p{L}\p{M}\p{N}\p{Sk}\p{So}\p{Cf}]|https?://(www\.?))+')
+
+# Identifies Discord mention syntax in message text.
+_CHANNEL_MENTION_REGEX = regex.compile(r'<#([0-9]+)>')
+_ROLE_MENTION_REGEX = regex.compile(r'<@&([0-9]+)>')
+_USER_MENTION_REGEX = regex.compile(r'<@!?([0-9]+)>')
 
 _logger = logging.getLogger('bot.thread')
 
@@ -88,9 +93,15 @@ class ThreadChannel:
                           f'\n      "{channel.topic}"')
             return None
 
-        cref = topic_match.group(1)
-        ci = int(cref[2:-1]) if cref.startswith('<#') else int(cref, 16)
-        mi = int(topic_match.group(2), 16)
+        cref, mref = topic_match.group(1), topic_match.group(2)
+        try:
+            ci = int(cref[2:-1]) if cref.startswith('<#') else int(cref, 16)
+            mi = int(mref, 16) if len(mref) <= 16 else int(mref)
+        except ValueError:
+            _logger.debug(f'\n    Bad topic ID: {fobj(c=channel)}'
+                          f'\n      "{channel.topic}"')
+            return None
+
         if _logger.isEnabledFor(logging.DEBUG):
             origin = fobj(c=ci, m=mi, g='', client=channel.guild)
             overwrites = fobj(p=channel.overwrites).replace('\n', '\n        ')
@@ -160,7 +171,7 @@ class ThreadChannel:
 
         # Use a name and topic format that lets this bot recognize it later.
         ci, mi = channel.id, message.id
-        topic = (f'Thread started by <@{rx_users[0].id}> for [<#{ci}>/{mi:x}].')
+        topic = (f'Thread started by <@{rx_users[0].id}> for [<#{ci}>/{mi}].')
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.info(
                 f'\n    Creating #{name} ({channel.guild.name})'
@@ -206,7 +217,7 @@ class ThreadChannel:
         # If the intro set shrinks, re-check the origin to handle the corner
         # case where the 🧵 was removed and *then* all channel posts deleted.
         if len(self._cached_intro) < old_len:
-            await self.refresh_origin()
+            await self.async_refresh_origin()
 
     async def async_refresh_origin(self):
         """Re-fetches the state of the thread's origin message and updates
@@ -253,14 +264,14 @@ class ThreadChannel:
                 return  # Thread channel is deleted, nothing more to update.
 
             # The thread still has messages, edit its intro but do not delete.
-            content = f'🧵 original message in <#{channel_id}> was **deleted**'
-            await self._async_post_intro(content=content, embed=None)
+            description = f'🧵 The original message was **deleted**!'
+            await self._async_post_intro(
+                content='', embed=discord.Embed(description=description))
             return
 
-        gi, ci, mi = origin.guild.id, origin.channel.id, origin.id
+        ci, mi = origin.channel.id, origin.id
         assert (ci, mi) == (self.origin_channel_id, self.origin_message_id)
         assert self.thread_channel is not None
-
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.debug(
                 f'\n    Refreshed {fobj(c=self.thread_channel)}'
@@ -278,29 +289,9 @@ class ThreadChannel:
             self.is_deleted = True
             return  # Thread channel is deleted, nothing more to update.
 
-        # Update the thread intro with a copy of the origin message.
-        # TODO: Worry about mentions inside embeds?
-        if self._cached_intro is not None:
-            # Update intro message content and attached embed.
-            who = origin.author
-            description = (origin.content + '\n\xA0\n🧵 [original message]'
-                           f'(https://discordapp.com/channels/{gi}/{ci}/{mi})'
-                           f' in <#{ci}> by <@{who.id}>').strip()
-
-            for a in origin.attachments:
-                escaped_name = discord.utils.escape_markdown(a.filename)
-                description += f'\n📎 [{escaped_name}]({a.proxy_url or a.url})'
-                if a.is_spoiler():
-                    a.description += ' (spoiler!)'
-
-            for e in origin.embeds:
-                if e.title and e.url:
-                    escaped_title = discord.utils.escape_markdown(e.title)
-                    description += f'\n🔗 [{escaped_title}]({e.url})'
-
-            embed = discord.Embed(description=description)
-            embed.set_author(name=who.display_name, icon_url=who.avatar_url)
-            await self._async_post_intro(content='', embed=embed)
+        # Update the intro message embed which shows the origin message.
+        embed = self._make_message_embed(origin)
+        await self._async_post_intro(content='', embed=embed)
 
         # Use origin channel permissions as a baseline for the thread channel.
         overwrites = collections.defaultdict(
@@ -335,6 +326,53 @@ class ThreadChannel:
         if changed:
             await self.thread_channel.edit(overwrites=overwrites)
 
+    def _make_message_embed(self, origin):
+        """Internal method to create an embed (content card) capturing
+        the content of a thread's origin message."""
+
+        # Build the body from the original content plus a footer.
+        who = origin.author
+        gi, ci, mi = origin.guild.id, origin.channel.id, origin.id
+        origin_link = f'https://discordapp.com/channels/{gi}/{ci}/{mi}'
+        foot = f'🧵 [original message]({origin_link}) in <#{ci}> by <@{who.id}>'
+        description = (origin.content + '\n\xA0\n' + foot).strip()
+
+        # Add items below the footer for attachments & embeds in the original.
+        for a in origin.attachments:
+            escaped_name = discord.utils.escape_markdown(a.filename)
+            description += f'\n📎 [{escaped_name}]({a.proxy_url or a.url})'
+            if a.is_spoiler():
+                description += ' (spoiler!)'
+
+        for e in origin.embeds:
+            if e.title and e.url:
+                escaped_title = discord.utils.escape_markdown(e.title)
+                description += f'\n🔗 [{escaped_title}]({e.url})'
+
+        # Replace channel/role/user mentions with direct hyperlinks
+        # (sadly, mentions are unreliable in Discord embed content).
+        def replace_channel(match):
+            c = origin.guild.get_channel(int(match.group(1)))
+            return (f'[#{c.name}](https://discordapp.com/channels/{gi}/{c.id})'
+                    if c else match.group(0))
+
+        def replace_role(match):
+            r = origin.guild.get_role(int(match.group(1)))
+            return (f'**@{r.name}**' if r else match.group(0))
+
+        def replace_user(match):
+            # (Could use discordapp.com/users/ID but that pops up a window.)
+            u = origin.guild.get_member(int(match.group(1)))
+            return (f'**@{u.display_name}**' if u else match.group(0))
+
+        description = _CHANNEL_MENTION_REGEX.sub(replace_channel, description)
+        description = _ROLE_MENTION_REGEX.sub(replace_role, description)
+        description = _USER_MENTION_REGEX.sub(replace_user, description)
+
+        embed = discord.Embed(description=description)
+        embed.set_author(name=who.display_name, icon_url=who.avatar_url)
+        return embed
+
     async def _async_post_intro(self, content, embed):
         """Internal method to add or edit the thread's intro message.
 
@@ -342,6 +380,9 @@ class ThreadChannel:
             content: str - Body of intro message (can be '')
             embed: discord.Embed - "Embedded" rich content (can be None)
         """
+
+        if self._cached_intro is None:
+            return  # Intro not fetched yet; fetch completion will resync.
 
         # Look for the first intro post by us.
         me = self.thread_channel.guild.me
