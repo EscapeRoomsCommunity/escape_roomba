@@ -1,5 +1,6 @@
 """Unit tests for thread_channel.ThreadChannel."""
 
+import discord
 import pytest
 
 from escape_roomba.thread_channel import ThreadChannel
@@ -59,14 +60,23 @@ async def test_relevant_intro_update(discord_mock, thread_channel):
 async def test_maybe_create_from_origin(discord_mock):
     client = discord_mock.context.discord()
     message = client.guilds[0].channels[0].history_for_mock[0]
-    tc = await ThreadChannel.async_maybe_create_from_origin(
+    thread_channel = await ThreadChannel.async_maybe_create_from_origin(
         client, message.channel.id, message.id)
-    assert tc is None
+    assert thread_channel is None
 
-    discord_mock.sim_reaction(message, '🧵', client.guilds[0].members[0], +1)
-    tc = await ThreadChannel.async_maybe_create_from_origin(
+    discord_mock.sim_reaction(message, '🧵', message.guild.members[0], +1)
+    thread_channel = await ThreadChannel.async_maybe_create_from_origin(
         client, message.channel.id, message.id)
-    assert tc is not None
+    assert thread_channel is not None
+    assert thread_channel.thread_channel.name == '🧵Mock-message-0-in…'
+
+    Overwrite = discord.PermissionOverwrite
+    assert thread_channel.thread_channel.overwrites == {
+        message.guild.default_role: Overwrite(read_messages=False),
+        message.guild.me: Overwrite(read_messages=True),
+        message.guild.members[0]: Overwrite(read_messages=True),
+    }
+
     assert message.reactions[0].count == 2
 
 

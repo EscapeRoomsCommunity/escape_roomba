@@ -5,6 +5,7 @@ import discord.utils
 import logging
 import regex
 import unicodedata
+from copy import deepcopy
 
 from escape_roomba.format_util import fobj
 
@@ -79,22 +80,24 @@ class ThreadChannel:
 
         if (channel is None or channel.type != discord.ChannelType.text or
                 not channel.name.startswith(_THREAD_EMOJI)):
-            _logger.debug(f'Nonthread: {fobj(c=channel)}')
             return None
 
         topic_match = _TOPIC_PARSE_REGEX.match(channel.topic or '')
         if not topic_match:
-            _logger.debug(f'Bad topic: {fobj(c=channel)}\n'
-                          f'    "{channel.topic}"')
+            _logger.debug(f'\n    Bad topic: {fobj(c=channel)}'
+                          f'\n      "{channel.topic}"')
             return None
 
         cref = topic_match.group(1)
         ci = int(cref[2:-1]) if cref.startswith('<#') else int(cref, 16)
         mi = int(topic_match.group(2), 16)
         if _logger.isEnabledFor(logging.DEBUG):
-            _logger.debug(f'Thread: {fobj(c=channel)}\n'
-                          f'    "{channel.topic}"\n'
-                          f'    origin: {fobj(c=ci, m=mi)}')
+            origin = fobj(c=ci, m=mi, g='', client=channel.guild)
+            overwrites = fobj(p=channel.overwrites).replace('\n', '\n        ')
+            _logger.debug(f'\n    Existing thread {fobj(c=channel)}'
+                          f'\n      topic: "{channel.topic}"'
+                          f'\n      origin: {origin}'
+                          f'\n        {overwrites}')
 
         return ThreadChannel(channel, origin_cid=ci, origin_mid=mi)
 
@@ -104,31 +107,28 @@ class ThreadChannel:
         creates a new thread channel and returns a new ThreadChannel,
         otherwise returns None."""
 
-        channel = client.get_channel(channel_id)
+        ci, mi = channel_id, message_id
+        channel = client.get_channel(ci)
         if channel is None:
-            _logger.debug('No channel for candidate:\n'
-                          f'    {fobj(c=channel_id, m=message_id)}')
+            _logger.debug(f'\n    Bad cid: {fobj(c=ci, m=mi)}')
             return None
 
         try:
-            message = await channel.fetch_message(message_id)
+            message = await channel.fetch_message(mi)
         except discord.errors.NotFound:
-            _logger.debug('Fetch failed for candidate (NotFound):\n'
-                          f'    {fobj(c=channel, m=message_id)}')
+            _logger.debug(f'\n    Bad mid: {fobj(c=channel, m=mi)}')
             return None
 
-        if message.author == channel.guild.me:
-            _logger.debug('Skipping candidate authored by this bot:\n'
-                          f'    {fobj(m=message)}')
+        if message.author == message.guild.me:
+            _logger.debug(f'\n    Self-post: {fobj(m=message)}')
             return None
 
         # Thread creation requires a 🧵 reaction without pile-on from this bot.
         rxs = message.reactions
         rx = next((r for r in rxs if str(r.emoji) == _THREAD_EMOJI), None)
-        users = rx and not rx.me and [u async for u in rx.users(limit=1)]
-        if not users:
-            _logger.debug('No unhandled 🧵 for candidate:\n'
-                          f'    {fobj(m=message)}')
+        rx_users = rx and not rx.me and [u async for u in rx.users()]
+        if not rx_users:
+            _logger.debug('\n    No 🧵: {fobj(m=message)}')
             return None
 
         # Generate a channel name from the message content.
@@ -150,6 +150,7 @@ class ThreadChannel:
             mash += '…'
             break
 
+        # Make the channel name unique to minimize confusion (not foolproof!).
         basic_name = f'{_THREAD_EMOJI}{mash or "thread"}'
         name, number = basic_name, 1  # Add a suffix if needed for uniqueness.
         existing = set(c.name for c in message.guild.channels)
@@ -157,26 +158,33 @@ class ThreadChannel:
             number += 1
             name = f'{basic_name}-{number}'
 
-        # Special name and topic format enables recognizability.
-        ci, mi = message.channel.id, message.id
-        topic = (f'Thread started by <@{users[0].id}> for [<#{ci}>/{mi:x}].')
+        # Use a name and topic format that lets this bot recognize it later.
+        ci, mi = channel.id, message.id
+        topic = (f'Thread started by <@{rx_users[0].id}> for [<#{ci}>/{mi:x}].')
         if _logger.isEnabledFor(logging.DEBUG):
-            _logger.info('Creating channel:\n'
-                         f'    "{message.guild.name}" #{name}\n'
-                         f'    topic "{topic}"\n'
-                         f'    origin {fobj(m=message)}')
+            _logger.info(
+                f'\n    Creating #{name} ({channel.guild.name})'
+                f'\n      topic: "{topic}"'
+                f'\n      origin: {fobj(m=message, g="")}' +
+                (f' 🧵x{rx.count}{" w/me" if rx.me else ""}' if rx else '') +
+                ''.join(f'\n        🧵 {fobj(u=u, g="")}' for u in rx_users))
 
-        thread_channel = await message.guild.create_text_channel(
-            name=name, category=message.channel.category,
-            position=len(message.guild.channels), topic=topic,
-            reason='Thread creation')
+        # Hidden at creation; _async_origin_updated() sets visibility.
+        Overwrite = discord.PermissionOverwrite
+        thread_channel = await channel.guild.create_text_channel(
+            name=name, category=message.channel.category, topic=topic,
+            position=message.channel.position + 1, reason='Thread creation',
+            overwrites={
+                channel.guild.default_role: Overwrite(read_messages=False),
+                channel.guild.me: Overwrite(read_messages=True),
+            })
 
         # Pile on to the 🧵 after creation as insurance against re-creation.
         await message.add_reaction(rx)
 
         thread = ThreadChannel(thread_channel, origin_cid=ci, origin_mid=mi)
         thread._cached_intro = []  # New channel has no messages yet!
-        await thread._async_origin_updated(message)
+        await thread._async_origin_updated(origin=message, rx_users=rx_users)
         return thread
 
     async def async_refresh_intro(self):
@@ -189,9 +197,9 @@ class ThreadChannel:
 
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.debug(
-                f'Fetched #{self.thread_channel.name} intro '
-                f'({old_len} => {len(self._cached_intro)}m):' +
-                ''.join(f'\n    {fobj(m=m)}' for m in self._cached_intro))
+                f'\n    Refreshed intro for {fobj(c=self.thread_channel)}' +
+                ''.join(f'\n      {fobj(m=m, c="", g="")}'
+                        for m in self._cached_intro))
 
         # Intro messages are tracked to know if there are other channel posts,
         # which prevent channel deletion if the original 🧵 is removed.
@@ -205,82 +213,87 @@ class ThreadChannel:
         the thread (updating the intro to match, checking reaction count, etc).
         """
 
-        channel = self.thread_channel.guild.get_channel(self.origin_channel_id)
-        message = None
+        ci, mi = self.origin_channel_id, self.origin_message_id
+        channel = self.thread_channel.guild.get_channel(ci)
         if channel is None:
-            _logger.debug('No channel for refresh:\n'
-                          f'    {fobj(c=channel_id, m=message_id)}')
-        else:
-            try:
-                message = await channel.fetch_message(self.origin_message_id)
-            except discord.errors.NotFound:
-                _logger.debug('Fetch failed for refresh (NotFound):\n'
-                              f'    {fobj(c=channel, m=message_id)}')
+            _logger.debug(f'\n    Bad cid: {fobj(c=ci, m=mi)}')
+            return await self._async_origin_updated(origin=None, rx_users=[])
 
-        await self._async_origin_updated(message)
+        try:
+            message = await channel.fetch_message(mi)
+        except discord.errors.NotFound:
+            _logger.debug(f'\n    Bad mid: {fobj(c=channel, m=mi)}')
+            return await self._async_origin_updated(origin=None, rx_users=[])
 
-    async def _async_origin_updated(self, message):
+        rxs = message.reactions
+        rx = next((r for r in rxs if str(r.emoji) == _THREAD_EMOJI), None)
+        rx_users = [u async for u in rx.users()] if rx else []
+        await self._async_origin_updated(origin=message, rx_users=rx_users)
+
+    async def _async_origin_updated(self, origin, rx_users):
         """Updates the thread based on new origin message state.
 
         Args:
             message: discord.Message - New origin message (None if deleted)
+            rx_users: list of discord.User - Users reacting with 🧵 emoji
         """
 
-        if message is None:  # The message has been deleted!
-            me = self.thread_channel.guild.me
+        if self.is_deleted:
+            return  # This thread channel is already gone, nothing to update.
+
+        # If the origin is deleted, keep the thread but mark the deletion.
+        me = self.thread_channel.guild.me
+        if origin is None:
             if (self._cached_intro is not None and
                     not any(m for m in self._cached_intro if m.author != me)):
                 # The thread is empty (no added content), remove the channel.
-                _logger.info('Deleting channel (origin gone):\n'
-                             f'    {fobj(c=self.thread_channel)}')
+                _logger.info(f'\n    Pruning {fobj(c=self.thread_channel)}')
                 await self.thread_channel.delete()
                 self.is_deleted = True
+                return  # Thread channel is deleted, nothing more to update.
 
-            # The thread still has messages in it, edit intro but do not
-            # delete.
+            # The thread still has messages, edit its intro but do not delete.
             content = f'🧵 original message in <#{channel_id}> was **deleted**'
             await self._async_post_intro(content=content, embed=None)
+            return
 
-        gi, ci, mi = message.channel.guild.id, message.channel.id, message.id
+        gi, ci, mi = origin.guild.id, origin.channel.id, origin.id
         assert (ci, mi) == (self.origin_channel_id, self.origin_message_id)
         assert self.thread_channel is not None
 
-        rxs = message.reactions
-        rx = next((r for r in rxs if str(r.emoji) == _THREAD_EMOJI), None)
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.debug(
-                f'Refetched origin:\n'
-                f'    thread: ({fobj(c=self.thread_channel)}):\n'
-                f'    origin: {fobj(m=message)}\n'
-                f'    reaction: '
-                f'x{rx.count}{" w/me" if rx.me else ""}' if rx else 'None')
+                f'\n    Refreshed {fobj(c=self.thread_channel)}'
+                f'\n      origin: {fobj(m=origin, g="")}' +
+                ''.join(f'\n        🧵 {fobj(u=u, g="")}' for u in rx_users))
 
         # If 🧵 reactions are gone and the thread is empty, remove the channel.
-        me = message.guild.me
-        if ((rx is None or (rx.count - rx.me) == 0) and
-            self._cached_intro is not None and
+        me = origin.guild.me
+        if (self._cached_intro is not None and
+                not any(u for u in rx_users if u != me) and
                 not any(m for m in self._cached_intro if m.author != me)):
-            _logger.info('Deleting channel (reactions removed):\n'
-                         f'    {fobj(c=self.thread_channel)}')
+            _logger.info('\n    Unmaking {fobj(c=self.thread_channel)}')
             await self.thread_channel.delete()
-            await message.remove_reaction(rx, me)
+            await origin.remove_reaction(_THREAD_EMOJI, me)
             self.is_deleted = True
+            return  # Thread channel is deleted, nothing more to update.
 
         # Update the thread intro with a copy of the origin message.
+        # TODO: Worry about mentions inside embeds?
         if self._cached_intro is not None:
             # Update intro message content and attached embed.
-            who = message.author
-            description = (message.content + '\n\xA0\n🧵 [original message]'
+            who = origin.author
+            description = (origin.content + '\n\xA0\n🧵 [original message]'
                            f'(https://discordapp.com/channels/{gi}/{ci}/{mi})'
                            f' in <#{ci}> by <@{who.id}>').strip()
 
-            for a in message.attachments:
+            for a in origin.attachments:
                 escaped_name = discord.utils.escape_markdown(a.filename)
                 description += f'\n📎 [{escaped_name}]({a.proxy_url or a.url})'
                 if a.is_spoiler():
                     a.description += ' (spoiler!)'
 
-            for e in message.embeds:
+            for e in origin.embeds:
                 if e.title and e.url:
                     escaped_title = discord.utils.escape_markdown(e.title)
                     description += f'\n🔗 [{escaped_title}]({e.url})'
@@ -288,6 +301,39 @@ class ThreadChannel:
             embed = discord.Embed(description=description)
             embed.set_author(name=who.display_name, icon_url=who.avatar_url)
             await self._async_post_intro(content='', embed=embed)
+
+        # Use origin channel permissions as a baseline for the thread channel.
+        overwrites = collections.defaultdict(
+            discord.PermissionOverwrite,
+            {u: deepcopy(o) for u, o in origin.channel.overwrites.items()})
+
+        # Remove all member/role-specific overwrites for visibility --
+        # they could conflict with our visibility assignments below
+        # (discord.com/developers/docs/topics/permissions#permission-overwrites)
+        for o in overwrites.values():
+            o.update(read_messages=None)
+
+        # Make the thread invisible for @everyone except as overridden.
+        overwrites[origin.guild.default_role].update(read_messages=False)
+        overwrites[me].update(read_messages=True)  # We get to see it!
+
+        # Allow thread visibility for those who react with the 🧵 emoji.
+        # TODO: Check access to the origin channel, in case that changes.
+        for u in rx_users:
+            overwrites[u].update(read_messages=True)
+
+        overwrites = {u: o for u, o in overwrites.items() if not o.is_empty()}
+        old = self.thread_channel.overwrites
+        changed = (old != overwrites)
+        if changed and _logger.isEnabledFor(logging.DEBUG):
+            fold = fobj(p=old).replace('\n', '\n        ')
+            fnew = fobj(p=overwrites).replace('\n', '\n        ')
+            _logger.debug(
+                f'\n    Setting permissions for {fobj(c=self.thread_channel)}):'
+                f'\n    Old {fold}\n    New {fnew}')
+
+        if changed:
+            await self.thread_channel.edit(overwrites=overwrites)
 
     async def _async_post_intro(self, content, embed):
         """Internal method to add or edit the thread's intro message.
@@ -314,9 +360,8 @@ class ThreadChannel:
             old_dict.get('author', {}).pop('proxy_icon_url', None)
             new_dict = embed.to_dict() if embed else {}
             if (old.content or '') != content or old_dict != new_dict:
-                _logger.debug('Updating intro:\n'
-                              f'    old: [{old.content}] / {old_dict}\n'
-                              f'    new: [{content}] / {new_dict}')
+                _logger.debug(
+                    f'\n    Updating intro for {fobj(c=self.thread_channel)}):'
+                    f'\n    Old: [{old.content}] / {old_dict}'
+                    f'\n    New: [{content}] / {new_dict}')
                 await old.edit(content=content, embed=embed)
-                _logger.info('Edited intro:\n'
-                             f'    {fobj(m=old)}')

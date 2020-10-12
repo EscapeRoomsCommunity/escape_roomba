@@ -72,7 +72,10 @@ class DiscordMockFixture:
         guild.name = name
         guild.channels = []
         guild.members = []
-        guild.me = client.user
+        guild.default_role = self.make_role(guild, '@everyone')
+        guild.me = self.make_user(
+            guild=guild, name=client.user.name, id=client.user.id,
+            discriminator=client.user.discriminator)
 
         async def create_text_channel(*args, **kwargs):
             return self.sim_add_channel(*args, guild=guild, **kwargs)
@@ -82,12 +85,23 @@ class DiscordMockFixture:
         logger_.debug(f'make_guild:\n    {fobj(g=guild)}')
         return guild
 
-    def make_user(self, guild=None, name=None, discriminator='9999'):
+    def make_role(self, guild, name=None):
+        """Returns a new Role-like Mock."""
+
+        role = self.pytest_mocker.Mock(spec=discord.Role, name='role')
+        role.id = self.unique_id()
+        role.name = name
+        role.guild = guild
+        # TODO: Add other fields and methods.
+        logger_.debug(f'make_role: {fobj(r=role)}')
+        return role
+
+    def make_user(self, guild=None, name=None, id=None, discriminator='9999'):
         """Returns a new User-like (or Member-like if guild is set) Mock."""
 
         user = self.pytest_mocker.Mock(
             spec=discord.Member if guild else discord.User, name='user')
-        user.id = self.unique_id()
+        user.id = id or self.unique_id()
         user.discriminator = discriminator
 
         if guild is None:
@@ -96,11 +110,12 @@ class DiscordMockFixture:
             user.name = name or 'Mock Member'
             user.guild = guild
 
-        logger_.debug(f'make_user:\n    {fobj(u=user)}')
+        logger_.debug(f'make_user: {fobj(u=user)}')
         return user
 
     def make_text_channel(self, guild, name='mock-channel', category=None,
-                          position=None, topic=None, reason=None):
+                          position=None, topic=None, reason=None,
+                          overwrites=None):
         # TODO: Handle all the other arguments, mangle the name...
         """Returns a new TextChannel-like Mock."""
 
@@ -112,7 +127,9 @@ class DiscordMockFixture:
         channel.name = name
         channel.topic = topic or f'topic for {name}'
         channel.history_for_mock = []  # Messages that history() will return.
-        # TODO: Handle category, position, and reason.
+        channel.position = position
+        channel.overwrites = overwrites or {}
+        # TODO: Handle category and reason.
 
         async def history(limit=100, oldest_first=None):
             limit = len(channel.history_for_mock) if limit is None else limit
@@ -131,18 +148,20 @@ class DiscordMockFixture:
             return self.sim_add_message(
                 channel=channel, author=guild.me, content=content, embed=embed)
 
+        async def edit(name=None, overwrites=None):
+            # TODO: Handle all the other arguments (and mangle the name)...
+            if overwrites is not None:
+                channel.overwrites = overwrites
+
         channel.history.side_effect = history
         channel.fetch_message.side_effect = fetch_message
         channel.send.side_effect = send
+        channel.edit.side_effect = edit
         logger_.debug(f'make_channel:\n    {fobj(c=channel)}')
         return channel
 
-    def make_message(
-            self,
-            channel,
-            author,
-            content='Mock content',
-            embed=None):
+    def make_message(self, channel, author, content='Mock content',
+                     embed=None):
         """Returns a new Message-like Mock."""
 
         message = self.pytest_mocker.Mock(spec=discord.Message, name='message')
@@ -223,17 +242,18 @@ class DiscordMockFixture:
             for mi in range(members_per_guild):
                 guild.members.append(self.make_user(
                     guild, name=f'Mock Member {mi}', discriminator=1000 + mi))
+
             for ci in range(channels_per_guild):
-                name = f'mock-channel-{ci}'
-                channel = self.make_text_channel(guild, name=name)
-                guild.channels.append(channel)
+                chan = self.sim_add_channel(guild, name=f'mock-channel-{ci}')
                 for mi in range(messages_per_channel):
                     # Need member for message author.
                     assert len(guild.members) > 0
-                    channel.history_for_mock.append(self.make_message(
-                        channel, guild.members[mi % len(guild.members)],
-                        f'Mock message {mi} in #mock-channel-{ci}'))
+                    author = guild.members[mi % len(guild.members)]
+                    self.sim_add_message(
+                        channel=chan, author=author,
+                        content=f'Mock message {mi} in #mock-channel-{ci}')
 
+        self.event_queue = []  # No events for initial content.
         logger_.debug('reset_data done')
 
     def queue_event(self, event_name, *args, **kwargs):
@@ -345,7 +365,11 @@ class DiscordMockFixture:
 
         logger_.debug(f'sim_add_channel: #{name}')
         channel = self.make_text_channel(guild, name, *args, **kwargs)
-        guild.channels.append(channel)
+        if channel.position is None:
+            channel.position = len(guild.channels)
+        guild.channels.insert(channel.position, channel)
+        for i in range(channel.position + 1, len(guild.channels)):
+            guild.channels[i].position = i
         self.queue_event('on_guild_channel_create', channel)
         return channel
 
