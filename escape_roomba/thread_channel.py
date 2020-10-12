@@ -14,8 +14,12 @@ _MAX_CHANNEL_NAME_LENGTH = 20  # Maximum length of generated channel name.
 _CACHE_INTRO_MESSAGES = 2      # Track the first N messages in the thread.
 
 # Extracts channel/message ID from existing thread channel topics.
+# (The optional asterisk marks the "new to author" flag.)
 _TOPIC_PARSE_REGEX = regex.compile(
-    r'.*\[(?:id=)?(<#[0-9]+>|[0-9a-f]+)/([0-9a-f]+)(\*?)\][\s.]*', regex.I)
+    r'(?P<prefix>^.*)\[(?:id=)?'
+    r'(?P<cref><#[0-9]+>|[0-9a-f]+)/'
+    r'(?P<mref>[0-9a-f]+)'
+    r'(?P<new>\*?)\][\s.]*$', regex.I)
 
 # Strips text that can't be used in channel names.
 _CHANNEL_CLEANUP_REGEX = regex.compile(
@@ -94,7 +98,7 @@ class ThreadChannel:
                           f'\n      "{channel.topic}"')
             return None
 
-        cref, mref = topic_match.group(1), topic_match.group(2)
+        cref, mref = topic_match.group('cref'), topic_match.group('mref')
         try:
             ci = int(cref[2:-1]) if cref.startswith('<#') else int(cref, 16)
             mi = int(mref, 16) if len(mref) <= 16 else int(mref)
@@ -103,6 +107,8 @@ class ThreadChannel:
                           f'\n      "{channel.topic}"')
             return None
 
+        thread = ThreadChannel(channel, origin_cid=ci, origin_mid=mi)
+        thread._new_to_author = bool(topic_match.group('new'))
         if _logger.isEnabledFor(logging.DEBUG):
             origin = fobj(c=ci, m=mi, g='', client=channel.guild)
             overwrites = fobj(p=channel.overwrites).replace('\n', '\n        ')
@@ -111,8 +117,7 @@ class ThreadChannel:
                           f'\n      origin: {origin}'
                           f'\n        {overwrites}')
 
-        thread = ThreadChannel(channel, origin_cid=ci, origin_mid=mi)
-        thread._new_to_author = bool(topic_match.group(3))
+        return thread
 
     @staticmethod
     async def async_maybe_create_from_origin(client, channel_id, message_id):
@@ -145,11 +150,8 @@ class ThreadChannel:
             return None
 
         # Generate a channel name from the message content.
-        # For better length trimming, take a stab at character culling
-        # (note, emoji ("So") and the ZWJ ("Cf") are valid in channel names);
-        # see wikipedia.org/wiki/Unicode_character_property#General_Category.
         mash = ''
-        text = message.content or ''
+        text = (message.content or '').replace("'", '')
         words = _CHANNEL_CLEANUP_REGEX.sub(' ', text).split()
         for word in words:
             to_add = ('-' if mash else '') + word
@@ -172,8 +174,9 @@ class ThreadChannel:
             name = f'{basic_name}-{number}'
 
         # Use a name and topic format that lets this bot recognize it later.
+        # (Include the '*' for the _new_to_author flag.)
         ci, mi = channel.id, message.id
-        topic = (f'Thread started by <@{rx_users[0].id}> for [<#{ci}>/{mi}].')
+        topic = (f'Thread started by <@{rx_users[0].id}> for [<#{ci}>/{mi}*].')
         pos = message.channel.position + 1
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.info(
@@ -342,8 +345,10 @@ class ThreadChannel:
                 f'\n    Setting permissions for {fobj(c=self.thread_channel)}):'
                 f'\n    Old {fold}\n    New {fnew}')
 
-        topic = self.thread_channel.topic or ''
-
+        topic_match = _TOPIC_PARSE_REGEX.match(self.thread_channel.topic or '')
+        topic_prefix = topic_match.group('prefix') if topic_match else ''
+        topic_mark = '*' if self._new_to_author else ''
+        topic = f'{topic_prefix}[<#{ci}>/{mi}{topic_mark}]'
         if old != overwrites or topic != self.thread_channel.topic:
             await self.thread_channel.edit(overwrites=overwrites, topic=topic)
 
