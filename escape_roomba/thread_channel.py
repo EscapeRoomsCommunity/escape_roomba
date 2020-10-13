@@ -36,7 +36,7 @@ _logger = logging.getLogger('bot.thread')
 # TODO:
 # - let people set thread channel name & topic (commands start with emoji?)
 # - use emoji (eg. 🔥) to indicate activity level in thread???
-# - add unit test for this class specifically
+# - split out intro-message generation into a separate class?
 
 class ThreadChannel:
     """Tracks and manages a thread channel created based on a 🧵 reaction;
@@ -352,7 +352,7 @@ class ThreadChannel:
             overwrites[u].update(read_messages=True)
 
         # Add the origin message's author by default until they explicitly
-        # join.
+        # join. TODO: Is this complexity worth it?
         if self._new_to_author and origin.author in rx_users:
             self._new_to_author = False
         if self._new_to_author:

@@ -163,6 +163,7 @@ class DiscordMockFixture:
         # Temporary hack to support bug workaround (see thread_channel.py).
         async def bulk_channel_update(*a, **kw):
             pass
+
         channel._state.http.bulk_channel_update.side_effect = \
             bulk_channel_update
 

@@ -147,7 +147,9 @@ class EventLogger:
 
 
 def event_logger_main():
-    """Main entry point from 'event_logger' wrapper script (pyproject.yaml)."""
+    """Main entry point from 'event_logger' script (pyproject.yaml) to connect
+    to Discord and logs events for debugging (without running any bot logic).
+    """
 
     import argparse
     import signal
