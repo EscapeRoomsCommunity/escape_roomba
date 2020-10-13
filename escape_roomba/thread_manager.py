@@ -126,8 +126,8 @@ class ThreadManager:
     # of the thread (or thread-to-be) to avoid races.
     #
 
-    async def _async_message_update(self, channel_id=None, channel=None,
-                                    message=None, message_id=None, emoji=None):
+    async def _async_message_update(self, channel_id=None, message_id=None,
+                                    message=None, emoji=None):
         """If an update looks relevant, acquires a lock, re-fetches, and
         processes a message. Requires one of channel_id/message_id or message.
 
@@ -228,24 +228,28 @@ class ThreadManager:
         """Handles a channel that is no longer visible (server detach,
         channel deleted, visibility change)."""
 
-        # Find the ThreadChannel to know which message ID to lock.
+        # If this is a thread channel, remove it.
         thread = self._thread_by_channel.get(channel.id)
-        if thread is None:
-            return
-
-        async with self._message_exclusive.locker(thread.origin_message_id):
-            recheck = self._thread_by_channel.get(channel.id)
-            if recheck is None:
+        if thread is not None:
+            async with self._message_exclusive.locker(thread.origin_message_id):
                 # The ThreadChannel may have been removed while locking.
-                return
+                recheck = self._thread_by_channel.get(channel.id)
+                if recheck is None:
+                    return
 
-            assert recheck is thread  # If not removed, should be the same.
-            ci, mi = thread.origin_channel_id, thread.origin_message_id
-            del self._thread_by_channel[channel.id]
-            del self._thread_by_origin[ci][mi]
-            if _logger.isEnabledFor(logging.DEBUG):
-                _logger.debug(f'\n    Thread gone: {fobj(c=channel)}'
-                              f'\n      Origin: {fobj(c=ci, m=mi)}')
+                assert recheck is thread  # If not removed, should be the same.
+                ci, mi = thread.origin_channel_id, thread.origin_message_id
+                del self._thread_by_channel[channel.id]
+                del self._thread_by_origin[ci][mi]
+                if _logger.isEnabledFor(logging.DEBUG):
+                    _logger.debug(f'\n    Thread gone: {fobj(c=channel)}'
+                                  f'\n      Origin: {fobj(c=ci, m=mi)}')
+
+        # Update threads originating in the deleted channel.
+        ci = channel.id
+        await asyncio.gather(*[
+            self._async_message_update(channel_id=ci, message_id=mi)
+            for mi in list(self._thread_by_origin.get(ci, {}).keys())])
 
 
 def thread_bot_main():
@@ -256,18 +260,16 @@ def thread_bot_main():
 
     import escape_roomba.context
     import escape_roomba.event_logger
+    import escape_roomba.thread_manager
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-    arg_parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
-    context = escape_roomba.context.Context(
-        parsed_args=arg_parser.parse_args(),
-        max_messages=None,
-        chunk_guilds_at_startup=True,  # For reliable permissions access.
+    arg_parser=argparse.ArgumentParser(parents=[escape_roomba.context.args])
+    context=escape_roomba.context.Context(
+        parsed_args=arg_parser.parse_args(), max_messages=None,
+        chunk_guilds_at_startup=True,   # For reliable permissions access.
         intents=discord.Intents(
-            guilds=True,
-            members=True,  # Needed for permission processing.
-            guild_messages=True,
-            guild_reactions=True))
+            guilds=True, members=True,  # Needed for permission processing.
+            guild_messages=True, guild_reactions=True))
 
     escape_roomba.event_logger.EventLogger(context)
     escape_roomba.thread_manager.ThreadManager(context)

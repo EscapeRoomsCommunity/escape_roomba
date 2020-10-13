@@ -131,16 +131,39 @@ class EventLogger:
                       self._fobj(g=p.guild_id, c=p.channel_id, m=p.message_id))
 
     async def _debug_on_guild_channel_delete(self, c):
-        _logger.debug(f'Delete {self._fobj(c=c)}')
+        _logger.debug(f'\n    Delete {self._fobj(c=c)}')
 
     async def _debug_on_guild_channel_create(self, c):
-        _logger.debug(f'Create {self._fobj(c=c)}')
+        _logger.debug(f'\n    Create {self._fobj(c=c)}')
 
     async def _debug_on_guild_channel_update(self, b, a):
-        _logger.debug(f'Update {self._fobj(c=b)}')
+        _logger.debug(f'\n    Update {self._fobj(c=a)}')
 
     async def _debug_on_guild_available(self, g):
-        _logger.debug(f'Server available {self._fobj(g=g)}')
+        _logger.debug(f'Guild avail {self._fobj(g=g)}')
 
     async def _debug_on_guild_unavailable(self, g):
-        _logger.debug(f'Server unavailable {self._fobj(g=g)}')
+        _logger.debug(f'Guild unavail {self._fobj(g=g)}')
+
+
+def event_logger_main():
+    """Main entry point from 'event_logger' script (pyproject.yaml) to connect
+    to Discord and logs events for debugging (without running any bot logic).
+    """
+
+    import argparse
+    import signal
+
+    import escape_roomba.context
+    import escape_roomba.event_logger
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    arg_parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
+    context = escape_roomba.context.Context(
+        parsed_args=arg_parser.parse_args(), max_messages=None,
+        intents=discord.Intents(
+            guilds=True, members=True,
+            guild_messages=True, guild_reactions=True))
+
+    escape_roomba.event_logger.EventLogger(context)
+    context.run_forever()

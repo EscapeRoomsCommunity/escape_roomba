@@ -3,8 +3,8 @@ docs.pytest.org/en/stable/fixture.html#conftest-py-sharing-fixture-functions.
 """
 
 import argparse
-import copy
 import logging
+from copy import copy
 
 import discord
 import pytest
@@ -148,15 +148,25 @@ class DiscordMockFixture:
             return self.sim_add_message(
                 channel=channel, author=guild.me, content=content, embed=embed)
 
-        async def edit(name=None, overwrites=None):
+        async def edit(name=None, overwrites=None, topic=None, reason=None):
             # TODO: Handle all the other arguments (and mangle the name)...
             if overwrites is not None:
                 channel.overwrites = overwrites
+            if topic is not None:
+                channel.topic = topic
 
         channel.history.side_effect = history
         channel.fetch_message.side_effect = fetch_message
         channel.send.side_effect = send
         channel.edit.side_effect = edit
+
+        # Temporary hack to support bug workaround (see thread_channel.py).
+        async def bulk_channel_update(*a, **kw):
+            pass
+
+        channel._state.http.bulk_channel_update.side_effect = \
+            bulk_channel_update
+
         logger_.debug(f'make_channel:\n    {fobj(c=channel)}')
         return channel
 
@@ -293,7 +303,7 @@ class DiscordMockFixture:
         return message
 
     def sim_edit_message(self, message, content=None, embed=None):
-        edited = copy.copy(message)
+        edited = copy(message)
         edited.content = content
         edited.embeds = [embed] if embed is not None else []
         logger_.debug('sim_edit_message:\n'
@@ -369,7 +379,9 @@ class DiscordMockFixture:
             channel.position = len(guild.channels)
         guild.channels.insert(channel.position, channel)
         for i in range(channel.position + 1, len(guild.channels)):
+            old = copy(guild.channels[i])
             guild.channels[i].position = i
+            self.queue_event('on_guild_channel_update', old, guild.channels[i])
         self.queue_event('on_guild_channel_create', channel)
         return channel
 

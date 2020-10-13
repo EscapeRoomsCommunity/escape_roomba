@@ -6,6 +6,7 @@ authors = ["Dan Egnor <egnor@ofb.net>", "Ana Ulin <ana@ulin.org>"]
 
 [tool.poetry.scripts]
 thread_bot = 'escape_roomba.thread_manager:thread_bot_main'
+event_logger = 'escape_roomba.event_logger:event_logger_main'
 
 [tool.poetry.dependencies]
 python = "^3.8"
