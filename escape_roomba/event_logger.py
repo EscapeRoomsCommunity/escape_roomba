@@ -137,10 +137,31 @@ class EventLogger:
         _logger.debug(f'\n    Create {self._fobj(c=c)}')
 
     async def _debug_on_guild_channel_update(self, b, a):
-        _logger.debug(f'\n    Update {self._fobj(c=b)}')
+        _logger.debug(f'\n    Update {self._fobj(c=a)}')
 
     async def _debug_on_guild_available(self, g):
         _logger.debug(f'Guild avail {self._fobj(g=g)}')
 
     async def _debug_on_guild_unavailable(self, g):
         _logger.debug(f'Guild unavail {self._fobj(g=g)}')
+
+
+def event_logger_main():
+    """Main entry point from 'event_logger' wrapper script (pyproject.yaml)."""
+
+    import argparse
+    import signal
+
+    import escape_roomba.context
+    import escape_roomba.event_logger
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    arg_parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
+    context = escape_roomba.context.Context(
+        parsed_args=arg_parser.parse_args(), max_messages=None,
+        intents=discord.Intents(
+            guilds=True, members=True,
+            guild_messages=True, guild_reactions=True))
+
+    escape_roomba.event_logger.EventLogger(context)
+    context.run_forever()

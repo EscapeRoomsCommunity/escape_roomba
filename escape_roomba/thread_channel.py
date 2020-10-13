@@ -110,9 +110,10 @@ class ThreadChannel:
         thread = ThreadChannel(channel, origin_cid=ci, origin_mid=mi)
         thread._new_to_author = bool(topic_match.group('new'))
         if _logger.isEnabledFor(logging.DEBUG):
+            newness = ' [*]' if thread._new_to_author else ''
             origin = fobj(c=ci, m=mi, g='', client=channel.guild)
             overwrites = fobj(p=channel.overwrites).replace('\n', '\n        ')
-            _logger.debug(f'\n    Found thread {fobj(c=channel)}'
+            _logger.debug(f'\n    Found thread {fobj(c=channel)}{newness}'
                           f'\n      topic: "{channel.topic}"'
                           f'\n      origin: {origin}'
                           f'\n        {overwrites}')
@@ -173,18 +174,31 @@ class ThreadChannel:
             number += 1
             name = f'{basic_name}-{number}'
 
+        # Place the new channel after the origin message's channel.
+        position = message.channel.position + 1
+
+        # Work around https://github.com/Rapptz/discord.py/issues/5923
+        renumber = list(enumerate(sorted(
+            (c for c in channel.guild.channels
+                 if c.type == channel.type and
+                    c.category_id == channel.category_id and
+                 (c.position, c.id) >= (message.channel.position, message.id)),
+            key=lambda c: (c.position, c.id)), start=position + 1))
+
         # Use a name and topic format that lets this bot recognize it later.
-        # (Include the '*' for the _new_to_author flag.)
+        # (Include the '*' for the _new_to_author flag set below)
         ci, mi = channel.id, message.id
         topic = (f'Thread started by <@{rx_users[0].id}> for [<#{ci}>/{mi}*].')
-        pos = message.channel.position + 1
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.info(
-                f'\n    Creating #{name} @p{pos} ({channel.guild.name})'
+                f'\n    Creating #{name} @p{position} ({channel.guild.name})'
                 f'\n      topic: "{topic}"'
                 f'\n      origin: {fobj(m=message, g="")}' +
-                (f' 🧵x{rx.count}{" w/me" if rx.me else ""}' if rx else '') +
-                ''.join(f'\n        🧵 {fobj(u=u, g="")}' for u in rx_users))
+                (f' 🧵x{rx.count}{" w/bot" if rx.me else ""}' if rx else '') +
+                ''.join(f'\n        🧵 {fobj(u=u, g="")}' for u in rx_users) +
+                f'\n    Renumbering {len(renumber)} channels' +
+                ''.join(f'\n        @p{c.position} => @p{p} #{c.name}'
+                    for p, c in renumber))
 
         # Hidden at creation; _async_origin_updated() sets visibility.
         Overwrite = discord.PermissionOverwrite
@@ -193,17 +207,24 @@ class ThreadChannel:
             channel.guild.me: Overwrite(read_messages=True),
         }
 
+        # Note, position can't be set here with this Python API (see docs).
         thread_channel = await channel.guild.create_text_channel(
             name=name, category=message.channel.category, topic=topic,
-            position=pos, reason='Thread creation', overwrites=overwrites)
+            reason='Thread creation', overwrites=overwrites)
 
         thread = ThreadChannel(thread_channel, origin_cid=ci, origin_mid=mi)
-        thread._cached_intro = []  # New channel has no messages yet!
+        thread._cached_intro = []     # New channel has no messages yet!
+        thread._new_to_author = True  # Reset in _async_origin_updated.
+
+        # Prepare to move the created channel along with others.
+        renumber.append((position, thread_channel))
 
         # Perform final steps in parallel to minimize latency.
         await asyncio.gather(
-            # Position doesn't take at creation (Discord bug), fix it up.
-            thread_channel.edit(position=pos),
+            # Position channel (and renumber successors).
+            thread_channel._state.http.bulk_channel_update(
+                guild_id=message.guild.id, reason='Thread positioning',
+                data=[{'id': c.id, 'position': p} for p, c in renumber]),
 
             # Pile on to the 🧵 as insurance against re-creation.
             message.add_reaction(rx),
@@ -290,7 +311,7 @@ class ThreadChannel:
         assert self.thread_channel is not None
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.debug(
-                f'\n    Syncing {fobj(c=self.thread_channel)}'
+                f'\n    Updating {fobj(c=self.thread_channel)}'
                 f'\n      origin: {fobj(m=origin, g="")}' +
                 ''.join(f'\n        🧵 {fobj(u=u, g="")}' for u in rx_users))
 
@@ -330,7 +351,8 @@ class ThreadChannel:
         for u in rx_users:
             overwrites[u].update(read_messages=True)
 
-        # Add the origin message's author by default until they explicitly join.
+        # Add the origin message's author by default until they explicitly
+        # join.
         if self._new_to_author and origin.author in rx_users:
             self._new_to_author = False
         if self._new_to_author:
@@ -350,7 +372,8 @@ class ThreadChannel:
         topic_mark = '*' if self._new_to_author else ''
         topic = f'{topic_prefix}[<#{ci}>/{mi}{topic_mark}]'
         if old != overwrites or topic != self.thread_channel.topic:
-            await self.thread_channel.edit(overwrites=overwrites, topic=topic)
+            await self.thread_channel.edit(
+                overwrites=overwrites, topic=topic, reason='Thread updating')
 
     def _make_message_embed(self, origin):
         """Internal method to create an embed (content card) capturing
