@@ -148,15 +148,24 @@ class DiscordMockFixture:
             return self.sim_add_message(
                 channel=channel, author=guild.me, content=content, embed=embed)
 
-        async def edit(name=None, overwrites=None):
+        async def edit(name=None, overwrites=None, topic=None, reason=None):
             # TODO: Handle all the other arguments (and mangle the name)...
             if overwrites is not None:
                 channel.overwrites = overwrites
+            if topic is not None:
+                channel.topic = topic
 
         channel.history.side_effect = history
         channel.fetch_message.side_effect = fetch_message
         channel.send.side_effect = send
         channel.edit.side_effect = edit
+
+        # Temporary hack to support bug workaround (see thread_channel.py).
+        async def bulk_channel_update(*a, **kw):
+            pass
+        channel._state.http.bulk_channel_update.side_effect = \
+            bulk_channel_update
+
         logger_.debug(f'make_channel:\n    {fobj(c=channel)}')
         return channel
 
