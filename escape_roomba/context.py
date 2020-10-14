@@ -12,6 +12,8 @@ logging_args = args.add_argument_group('logging')
 logging_args.add_argument('--debug', action='store_true')
 logging_args.add_argument('--debug_discord', action='store_true')
 
+_logger = logging.getLogger('bot.context')
+
 
 class Context:
     """Global data shared by bot subfunctions."""
@@ -52,8 +54,7 @@ class Context:
         try:
             bot_token = os.environ['ESCAPE_ROOMBA_BOT_TOKEN']
         except KeyError as e:
-            logger = logging.getLogger('bot')
-            logger.critical(f'No ${e.args[0]}! See README.md.')
+            _logger.critical(f'No ${e.args[0]}! See README.md.')
             raise SystemExit(1)
 
         self._client.run(bot_token)
@@ -83,11 +84,18 @@ class Context:
             if event_name == 'on_error':
                 # For on_error, serialize calls to preserve exc_info().
                 async def run(*args, **kw):
-                    [await l(*args, **kw) for l in listeners]
+                    for l in listeners:
+                        await l(*args, **kw)
             else:
                 # For non-error events, run all listeners asynchronously.
                 async def run(*args, **kw):
-                    await asyncio.gather(*[l(*args, **kw) for l in listeners])
+                    try:
+                        futures = [l(*args, **kw) for l in listeners]
+                        await asyncio.gather(*futures)
+                    except Exception:
+                        # Don't propagate -- it can mess up the client.
+                        _logger.exception(f'Error handling "{event_name}":')
+
             setattr(self._client, event_name, run)
 
         # Add to the listener list (captured by run() above).

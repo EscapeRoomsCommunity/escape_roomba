@@ -45,7 +45,7 @@ class EventLogger:
             discord.Permissions(
                 manage_channels=True, add_reactions=True, read_messages=True,
                 send_messages=True, manage_messages=True,
-                read_message_history=True, manage_roles=True))
+                read_message_history=True))
         _logger.info('\n    Open this link to add this bot to more servers:'
                      f'\n      {invite_url}')
 
