@@ -368,7 +368,7 @@ class ThreadChannel:
                               manage_messages=True, manage_permissions=True)
 
         old = self.thread_channel.overwrites
-        old_overwrites = {u: o for u, o in old.items() if not o.is_empty}
+        old_overwrites = {u: o for u, o in old.items() if not o.is_empty()}
         overwrites = {
             # Work around https://github.com/Rapptz/discord.py/issues/5929
             u: discord.PermissionOverwrite(
