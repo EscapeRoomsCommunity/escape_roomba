@@ -87,7 +87,8 @@ class ThreadChannel:
         If a new instance was generated, the caller should invoke
         async_update_origin() and async_update_intro() (after locking)."""
 
-        if (channel is None or channel.type != discord.ChannelType.text or
+        Type = discord.ChannelType
+        if (channel is None or channel.type not in (Type.text, Type.news) or
                 not channel.name.startswith(_THREAD_EMOJI)):
             _logger.debug(f'\n    Nonthread: {fobj(c=channel)}')
             return None
@@ -179,9 +180,10 @@ class ThreadChannel:
 
         # Work around https://github.com/Rapptz/discord.py/issues/5923
         guild, ci, mi = channel.guild, channel.id, message.id
+        type = discord.ChannelType
         renumber = list(enumerate(sorted(
             (c for c in guild.channels
-             if c.type == channel.type and
+             if c.type in (type.text, type.news, type.store) and
              c.category_id == channel.category_id and
              (c.position, c.id) >= (message.channel.position, mi)),
             key=lambda c: (c.position, c.id)), start=position + 1))
@@ -494,7 +496,17 @@ class ThreadChannel:
                     notes += (f'\n        {k}: {repr(o)}' if o == n else
                               f'\n      - {k}: {repr(o)}'
                               f'\n      + {k}: {repr(n)}')
+            if not old.pinned:
+                notes += f'\n    Pinning {fobj(m=old)}'
+
             _logger.debug(notes or f'\n    No change for {fobj(m=old)}')
 
-        if content != old_content or new_dict != old_dict:
-            await old.edit(content=content, embed=embed)
+        async def maybe_edit():
+            if content != old_content or new_dict != old_dict:
+                await old.edit(content=content, embed=embed)
+
+        async def maybe_pin():
+            if not old.pinned:
+                await old.pin()
+
+        await asyncio.gather(maybe_edit(), maybe_pin())
