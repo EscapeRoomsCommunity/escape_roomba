@@ -213,6 +213,7 @@ class ThreadManager:
             return
 
         # Go through the history and check for unprocessed new threads.
+        # TODO: Process the messages in parallel (with async.gather).
         async for m in channel.history(limit=_RECENT_COUNT, oldest_first=False):
             if ThreadChannel.relevant_origin_update(message=m):
                 ci, mi = m.channel.id, m.id
@@ -263,8 +264,8 @@ def thread_bot_main():
     import escape_roomba.thread_manager
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-    arg_parser=argparse.ArgumentParser(parents=[escape_roomba.context.args])
-    context=escape_roomba.context.Context(
+    arg_parser = argparse.ArgumentParser(parents=[escape_roomba.context.args])
+    context = escape_roomba.context.Context(
         parsed_args=arg_parser.parse_args(), max_messages=None,
         chunk_guilds_at_startup=True,   # For reliable permissions access.
         intents=discord.Intents(

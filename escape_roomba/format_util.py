@@ -127,17 +127,21 @@ def fobj(client=None, g=None, c=None, u=None, r=None, m=None, p=None):
     elif g:
         out.append(fid(g).replace('<', '<g:'))
 
-    if hasattr(p, 'items'):  # user/overwrites dict
+    # Shorten permission names so they fit better.
+    def abbrev(a):
+        return a.replace('message', 'msg').replace('history', 'hist')
+
+    if hasattr(p, 'items'):   # user/permission dict
         out.append('\n'.join(
             f'{fobj(p=v)} for {fobj(u=k, g="")}' for k, v in p.items()) or
             '(no user overwrites)')
-    elif hasattr(p, 'pair'):  # PermissionOverwrites-like
-        out.append(
-            ', '.join(f'{k}={"NY"[v]}' for k, v in sorted(p) if v is not None)
-            or '(no overwrites)')
+    elif hasattr(p, 'pair'):  # PermissionOverwrite-like
+        ab, db = (v.value for v in p.pair())
+        kv = [f'{abbrev(k)}={"NY"[v]}' for k, v in sorted(p) if v is not None]
+        out.append(f'{ab:x}-{db:x} ' + ', '.join(kv) or '(no overwrites)')
     elif hasattr(p, 'value'):  # Permissions-like
-        out.append(', '.join(f'{k}' for k, v in sorted(p) if v) or
-                   '(no permissions)')
+        kv = [abbrev(k) for k, v in sorted(p) if v]
+        out.append(f'{p.value:x} ' + ', '.join(kv) or '(no permissions)')
     elif p:
         out.append(fobj(p=discord.Permissions(p)))
 

@@ -152,7 +152,7 @@ class ThreadChannel:
 
         # Generate a channel name from the message content.
         mash = ''
-        text = (message.content or '').replace("'", '')
+        text = (message.content or '').replace("'", '').lower()
         words = _CHANNEL_CLEANUP_REGEX.sub(' ', text).split()
         for word in words:
             to_add = ('-' if mash else '') + word
@@ -178,33 +178,36 @@ class ThreadChannel:
         position = message.channel.position + 1
 
         # Work around https://github.com/Rapptz/discord.py/issues/5923
+        guild, ci, mi = channel.guild, channel.id, message.id
         renumber = list(enumerate(sorted(
-            (c for c in channel.guild.channels
-                 if c.type == channel.type and
-                    c.category_id == channel.category_id and
-                 (c.position, c.id) >= (message.channel.position, message.id)),
+            (c for c in guild.channels
+             if c.type == channel.type and
+             c.category_id == channel.category_id and
+             (c.position, c.id) >= (message.channel.position, mi)),
             key=lambda c: (c.position, c.id)), start=position + 1))
 
         # Use a name and topic format that lets this bot recognize it later.
         # (Include the '*' for the _new_to_author flag set below)
-        ci, mi = channel.id, message.id
         topic = (f'Thread started by <@{rx_users[0].id}> for [<#{ci}>/{mi}*].')
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.info(
-                f'\n    Creating #{name} @p{position} ({channel.guild.name})'
+                f'\n    Creating #{name} @p{position} ({guild.name})'
                 f'\n      topic: "{topic}"'
                 f'\n      origin: {fobj(m=message, g="")}' +
                 (f' 🧵x{rx.count}{" w/bot" if rx.me else ""}' if rx else '') +
                 ''.join(f'\n        🧵 {fobj(u=u, g="")}' for u in rx_users) +
                 f'\n    Renumbering {len(renumber)} channels' +
                 ''.join(f'\n        @p{c.position} => @p{p} #{c.name}'
-                    for p, c in renumber))
+                        for p, c in renumber))
 
         # Hidden at creation; _async_origin_updated() sets visibility.
         Overwrite = discord.PermissionOverwrite
         overwrites = {
-            channel.guild.default_role: Overwrite(read_messages=False),
-            channel.guild.me: Overwrite(read_messages=True),
+            guild.default_role: Overwrite(read_messages=False),
+            guild.me: Overwrite(
+                read_messages=True, send_messages=True, embed_links=True,
+                read_message_history=True, manage_channels=True,
+                manage_permissions=True, manage_messages=True)
         }
 
         # Note, position can't be set here with this Python API (see docs).
@@ -311,7 +314,7 @@ class ThreadChannel:
         assert self.thread_channel is not None
         if _logger.isEnabledFor(logging.DEBUG):
             _logger.debug(
-                f'\n    Updating {fobj(c=self.thread_channel)}'
+                f'\n    Checking {fobj(c=self.thread_channel)}'
                 f'\n      origin: {fobj(m=origin, g="")}' +
                 ''.join(f'\n        🧵 {fobj(u=u, g="")}' for u in rx_users))
 
@@ -331,47 +334,71 @@ class ThreadChannel:
         embed = self._make_message_embed(origin)
         await self._async_post_intro(content='', embed=embed)
 
+        # Allow people who reacted with 🧵 (and the bot) to access the channel.
+        allowed_users = rx_users + [me]
+
+        # Add the origin's author by default until they explicitly join.
+        # TODO: Is this complexity worth it?
+        if self._new_to_author and origin.author in rx_users:
+            self._new_to_author = False
+        if self._new_to_author:
+            allowed_users.append(origin.author)
+
         # Use origin channel permissions as a baseline for the thread channel.
         overwrites = collections.defaultdict(
             discord.PermissionOverwrite,
             {u: deepcopy(o) for u, o in origin.channel.overwrites.items()})
 
-        # Remove all member/role-specific overwrites for visibility --
-        # they could conflict with our visibility assignments below
-        # (discord.com/developers/docs/topics/permissions#permission-overwrites)
+        # Clear overrides that could conflict with hiding the channel (see
+        # https://tinyurl.com/discord-overwrites).
         for o in overwrites.values():
             o.update(read_messages=None)
 
-        # Make the thread invisible for @everyone except as overridden.
+        # Hide the channel for @everyone except as overridden below.
         overwrites[origin.guild.default_role].update(read_messages=False)
-        overwrites[me].update(read_messages=True)  # We get to see it!
 
-        # Allow thread visibility for those who react with the 🧵 emoji.
+        # Allow thread access for everyone specifically added to the thread.
         # TODO: Check access to the origin channel, in case that changes.
-        for u in rx_users:
-            overwrites[u].update(read_messages=True)
+        for u in allowed_users:
+            overwrites[u].update(read_messages=True, send_messages=True,
+                                 read_message_history=True)
 
-        # Add the origin message's author by default until they explicitly
-        # join. TODO: Is this complexity worth it?
-        if self._new_to_author and origin.author in rx_users:
-            self._new_to_author = False
-        if self._new_to_author:
-            overwrites[origin.author].update(read_messages=True)
+        # Give ourselves extra permissions.
+        overwrites[me].update(manage_channels=True, embed_links=True,
+                              manage_messages=True, manage_permissions=True)
 
-        overwrites = {u: o for u, o in overwrites.items() if not o.is_empty()}
         old = self.thread_channel.overwrites
-        if old != overwrites and _logger.isEnabledFor(logging.DEBUG):
-            fold = fobj(p=old).replace('\n', '\n        ')
-            fnew = fobj(p=overwrites).replace('\n', '\n        ')
-            _logger.debug(
-                f'\n    Setting permissions for {fobj(c=self.thread_channel)}):'
-                f'\n    Old {fold}\n    New {fnew}')
+        old_overwrites = {u: o for u, o in old.items() if not o.is_empty()}
+        overwrites = {
+            # Work around https://github.com/Rapptz/discord.py/issues/5929
+            u: discord.PermissionOverwrite(
+                **{k: v for k, v in o if v is not None})
+            for u, o in overwrites.items() if not o.is_empty()
+        }
 
-        topic_match = _TOPIC_PARSE_REGEX.match(self.thread_channel.topic or '')
+        old_topic = self.thread_channel.topic
+        topic_match = _TOPIC_PARSE_REGEX.match(old_topic or '')
         topic_prefix = topic_match.group('prefix') if topic_match else ''
         topic_mark = '*' if self._new_to_author else ''
         topic = f'{topic_prefix}[<#{ci}>/{mi}{topic_mark}]'
-        if old != overwrites or topic != self.thread_channel.topic:
+
+        # Print diffs of updates, which is helpful for debugging.
+        if _logger.isEnabledFor(logging.DEBUG):
+            notes, fchannel = '', fobj(c=self.thread_channel)
+            if overwrites != old_overwrites:
+                notes += f'\n    Editing permissions of {fchannel}:'
+                for u in overwrites.keys() | old_overwrites.keys():
+                    n, o = overwrites.get(u), old_overwrites.get(u)
+                    notes += (f'\n        {fobj(p=o)} for {fobj(u=u, g="")}'
+                              if o == n else
+                              f'\n      - {fobj(p=o)} for {fobj(u=u, g="")}'
+                              f'\n      + {fobj(p=n)} for {fobj(u=u, g="")}')
+            if topic != old_topic:
+                notes += (f'\n    Editing topic of {fchannel}:'
+                          f'\n      - "{old_topic}"\n      + "{topic}"')
+            _logger.debug(notes or f'\n    No change for {fchannel}')
+
+        if overwrites != old_overwrites or topic != old_topic:
             await self.thread_channel.edit(
                 overwrites=overwrites, topic=topic, reason='Thread updating')
 
@@ -438,20 +465,36 @@ class ThreadChannel:
         old = next((m for m in self._cached_intro if m.author == me), None)
 
         # Post or edit the intro if actual != desired.
-        if old is None and len(self._cached_intro) >= _CACHE_INTRO_MESSAGES:
-            _logger.error('Another user sniped the first post!\n'
-                          f'    {fobj(m=thread._cached_intro[0])}')
-        elif old is None and len(self._cached_intro) < _CACHE_INTRO_MESSAGES:
+        if old is None:
+            if len(self._cached_intro) >= _CACHE_INTRO_MESSAGES:
+                _logger.error('Another user sniped the first post!\n'
+                              f'    {fobj(m=thread._cached_intro[0])}')
+                return
+
             m = await self.thread_channel.send(content=content, embed=embed)
             self._cached_intro.append(m)
             _logger.info(f'Posted intro:\n    {fobj(m=m)}')
-        elif old is not None:
-            old_dict = old.embeds[0].to_dict() if old.embeds else {}
-            old_dict.get('author', {}).pop('proxy_icon_url', None)
-            new_dict = embed.to_dict() if embed else {}
-            if (old.content or '') != content or old_dict != new_dict:
-                _logger.debug(
-                    f'\n    Updating intro for {fobj(c=self.thread_channel)}):'
-                    f'\n    Old: [{old.content}] / {old_dict}'
-                    f'\n    New: [{content}] / {new_dict}')
-                await old.edit(content=content, embed=embed)
+            return
+
+        old_content = old.content or ''
+        old_dict = old.embeds[0].to_dict() if old.embeds else {}
+        old_dict.get('author', {}).pop('proxy_icon_url', None)
+        new_dict = embed.to_dict() if embed else {}
+
+        # Print diffs of updates, which is helpful for debugging.
+        if _logger.isEnabledFor(logging.DEBUG):
+            notes, fchannel = '', fobj(c=self.thread_channel)
+            if content != old_content:
+                notes += (f'\n    Editing content of {fobj(m=old)}:'
+                          f'\n      - "{old_content}"\n      + "{content}"')
+            if old_dict != new_dict:
+                notes += f'\n    Editing embed of {fobj(m=old)}:'
+                for k in new_dict.keys() | old_dict.keys():
+                    n, o = new_dict.get(k), old_dict.get(k)
+                    notes += (f'\n        {k}: {repr(o)}' if o == n else
+                              f'\n      - {k}: {repr(o)}'
+                              f'\n      + {k}: {repr(n)}')
+            _logger.debug(notes or f'\n    No change for {fobj(m=old)}')
+
+        if content != old_content or new_dict != old_dict:
+            await old.edit(content=content, embed=embed)

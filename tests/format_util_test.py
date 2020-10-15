@@ -41,20 +41,21 @@ def test_fobj(discord_mock):
     # Verify fobj() with permissions-type objects.
     permissions = discord.Permissions(stream=True, read_messages=True)
     overwrite = discord.PermissionOverwrite(stream=False, read_messages=True)
-    assert fobj(p=1536) == 'read_messages, stream'
-    assert fobj(p=permissions) == 'read_messages, stream'
-    assert fobj(p=overwrite) == 'read_messages=Y, stream=N'
+    assert fobj(p=1536) == '600 read_msgs, stream'
+    assert fobj(p=permissions) == '600 read_msgs, stream'
+    assert fobj(p=overwrite) == '400-200 read_msgs=Y, stream=N'
 
     discord_mock.reset_data(members_per_guild=2)
     members = context.discord().guilds[0].members
+    Overwrite = discord.PermissionOverwrite
     overwrites = {
-        members[0]: discord.PermissionOverwrite(stream=1, read_messages=0),
-        members[1]: discord.PermissionOverwrite(stream=0, read_messages=1),
+        members[0]: Overwrite(stream=True, read_messages=False),
+        members[1]: Overwrite(stream=False, read_messages=True),
     }
     assert (
         fobj(p=overwrites) ==
-        'read_messages=N, stream=Y for <@Mock Member 0#1000>\n'
-        'read_messages=Y, stream=N for <@Mock Member 1#1001>')
+        '200-400 read_msgs=N, stream=Y for <@Mock Member 0#1000>\n'
+        '400-200 read_msgs=Y, stream=N for <@Mock Member 1#1001>')
 
     # Verify fobj() produces reasonable output with all parameters None.
     assert fobj() == '(None)'

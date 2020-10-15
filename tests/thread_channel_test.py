@@ -68,13 +68,20 @@ async def test_maybe_create_from_origin(discord_mock):
     thread_channel = await ThreadChannel.async_maybe_create_from_origin(
         client, message.channel.id, message.id)
     assert thread_channel is not None
-    assert thread_channel.thread_channel.name == '🧵Mock-message-0-in…'
+    assert thread_channel.thread_channel.name == '🧵mock-message-0-in…'
 
     Overwrite = discord.PermissionOverwrite
     assert thread_channel.thread_channel.overwrites == {
-        message.guild.default_role: Overwrite(read_messages=False),
-        message.guild.me: Overwrite(read_messages=True),
-        message.guild.members[0]: Overwrite(read_messages=True),
+        message.guild.default_role:
+            Overwrite(read_messages=False),
+        message.guild.me:
+            Overwrite(embed_links=True, manage_channels=True,
+                      manage_messages=True, manage_permissions=True,
+                      read_message_history=True, read_messages=True,
+                      send_messages=True),
+        message.guild.members[0]:
+            Overwrite(read_messages=True, send_messages=True,
+                      read_message_history=True),
     }
 
     assert message.reactions[0].count == 2
