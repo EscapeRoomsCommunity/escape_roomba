@@ -148,7 +148,7 @@ class ThreadChannel:
         rx = next((r for r in rxs if str(r.emoji) == _THREAD_EMOJI), None)
         rx_users = rx and not rx.me and [u async for u in rx.users()]
         if not rx_users:
-            _logger.debug('\n    No 🧵: {fobj(m=message)}')
+            _logger.debug(f'\n    No new 🧵: {fobj(m=message)}')
             return None
 
         # Generate a channel name from the message content.
@@ -474,8 +474,9 @@ class ThreadChannel:
                 return
 
             m = await self.thread_channel.send(content=content, embed=embed)
+            await m.pin()
             self._cached_intro.append(m)
-            _logger.info(f'Posted intro:\n    {fobj(m=m)}')
+            _logger.info(f'Posted & pinned intro:\n    {fobj(m=m)}')
             return
 
         old_content = old.content or ''
