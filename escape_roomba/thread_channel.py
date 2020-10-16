@@ -390,11 +390,11 @@ class ThreadChannel:
             if overwrites != old_overwrites:
                 notes += f'\n    Editing permissions of {fchannel}:'
                 for u in overwrites.keys() | old_overwrites.keys():
+                    fu = fobj(u=u, g="")
                     n, o = overwrites.get(u), old_overwrites.get(u)
-                    notes += (f'\n        {fobj(p=o)} for {fobj(u=u, g="")}'
-                              if o == n else
-                              f'\n      - {fobj(p=o)} for {fobj(u=u, g="")}'
-                              f'\n      + {fobj(p=n)} for {fobj(u=u, g="")}')
+                    notes += f'\n        {fobj(p=n)} for {fu}' if n == o else (
+                        (f'\n      - {fobj(p=o)} for {fu}' if o else '') +
+                        (f'\n      + {fobj(p=n)} for {fu}' if n else ''))
             if topic != old_topic:
                 notes += (f'\n    Editing topic of {fchannel}:'
                           f'\n      - "{old_topic}"\n      + "{topic}"')
@@ -494,9 +494,9 @@ class ThreadChannel:
                 notes += f'\n    Editing embed of {fobj(m=old)}:'
                 for k in new_dict.keys() | old_dict.keys():
                     n, o = new_dict.get(k), old_dict.get(k)
-                    notes += (f'\n        {k}: {repr(o)}' if o == n else
-                              f'\n      - {k}: {repr(o)}'
-                              f'\n      + {k}: {repr(n)}')
+                    notes += f'\n        {k}: {repr(n)}' if n == o else (
+                        (f'\n      - {k}: {repr(o)}' if o else '') +
+                        (f'\n      + {k}: {repr(n)}' if n else ''))
             if not old.pinned:
                 notes += f'\n    Pinning {fobj(m=old)}'
 
