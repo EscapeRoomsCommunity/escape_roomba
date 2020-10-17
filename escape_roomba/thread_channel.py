@@ -7,6 +7,7 @@ import regex
 import unicodedata
 from copy import deepcopy
 
+from discord import ChannelType
 from escape_roomba.format_util import fobj
 
 _THREAD_EMOJI = '🧵'           # Reaction emoji trigger, and channel prefix.
@@ -87,8 +88,8 @@ class ThreadChannel:
         If a new instance was generated, the caller should invoke
         async_update_origin() and async_update_intro() (after locking)."""
 
-        Type = discord.ChannelType
-        if (channel is None or channel.type not in (Type.text, Type.news) or
+        if (channel is None or
+            channel.type not in (ChannelType.text, ChannelType.news) or
                 not channel.name.startswith(_THREAD_EMOJI)):
             _logger.debug(f'\n    Nonthread: {fobj(c=channel)}')
             return None
@@ -180,10 +181,9 @@ class ThreadChannel:
 
         # Work around https://github.com/Rapptz/discord.py/issues/5923
         guild, ci, mi = channel.guild, channel.id, message.id
-        type = discord.ChannelType
         renumber = list(enumerate(sorted(
-            (c for c in guild.channels
-             if c.type in (type.text, type.news, type.store) and
+            (c for c in guild.channels if channel.type in
+             (ChannelType.text, ChannelType.news, ChannelType.store) and
              c.category_id == channel.category_id and
              (c.position, c.id) >= (message.channel.position, mi)),
             key=lambda c: (c.position, c.id)), start=position + 1))
