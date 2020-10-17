@@ -7,6 +7,7 @@ import regex
 import unicodedata
 from copy import deepcopy
 
+from discord import ChannelType
 from escape_roomba.format_util import fobj
 
 _THREAD_EMOJI = '🧵'           # Reaction emoji trigger, and channel prefix.
@@ -87,7 +88,8 @@ class ThreadChannel:
         If a new instance was generated, the caller should invoke
         async_update_origin() and async_update_intro() (after locking)."""
 
-        if (channel is None or channel.type != discord.ChannelType.text or
+        if (channel is None or
+            channel.type not in (ChannelType.text, ChannelType.news) or
                 not channel.name.startswith(_THREAD_EMOJI)):
             _logger.debug(f'\n    Nonthread: {fobj(c=channel)}')
             return None
@@ -147,7 +149,7 @@ class ThreadChannel:
         rx = next((r for r in rxs if str(r.emoji) == _THREAD_EMOJI), None)
         rx_users = rx and not rx.me and [u async for u in rx.users()]
         if not rx_users:
-            _logger.debug('\n    No 🧵: {fobj(m=message)}')
+            _logger.debug(f'\n    No new 🧵: {fobj(m=message)}')
             return None
 
         # Generate a channel name from the message content.
@@ -180,8 +182,8 @@ class ThreadChannel:
         # Work around https://github.com/Rapptz/discord.py/issues/5923
         guild, ci, mi = channel.guild, channel.id, message.id
         renumber = list(enumerate(sorted(
-            (c for c in guild.channels
-             if c.type == channel.type and
+            (c for c in guild.channels if channel.type in
+             (ChannelType.text, ChannelType.news, ChannelType.store) and
              c.category_id == channel.category_id and
              (c.position, c.id) >= (message.channel.position, mi)),
             key=lambda c: (c.position, c.id)), start=position + 1))
@@ -388,11 +390,11 @@ class ThreadChannel:
             if overwrites != old_overwrites:
                 notes += f'\n    Editing permissions of {fchannel}:'
                 for u in overwrites.keys() | old_overwrites.keys():
+                    fu = fobj(u=u, g="")
                     n, o = overwrites.get(u), old_overwrites.get(u)
-                    notes += (f'\n        {fobj(p=o)} for {fobj(u=u, g="")}'
-                              if o == n else
-                              f'\n      - {fobj(p=o)} for {fobj(u=u, g="")}'
-                              f'\n      + {fobj(p=n)} for {fobj(u=u, g="")}')
+                    notes += f'\n        {fobj(p=n)} for {fu}' if n == o else (
+                        (f'\n      - {fobj(p=o)} for {fu}' if o else '') +
+                        (f'\n      + {fobj(p=n)} for {fu}' if n else ''))
             if topic != old_topic:
                 notes += (f'\n    Editing topic of {fchannel}:'
                           f'\n      - "{old_topic}"\n      + "{topic}"')
@@ -472,8 +474,9 @@ class ThreadChannel:
                 return
 
             m = await self.thread_channel.send(content=content, embed=embed)
+            await m.pin()
             self._cached_intro.append(m)
-            _logger.info(f'Posted intro:\n    {fobj(m=m)}')
+            _logger.info(f'Posted & pinned intro:\n    {fobj(m=m)}')
             return
 
         old_content = old.content or ''
@@ -491,10 +494,20 @@ class ThreadChannel:
                 notes += f'\n    Editing embed of {fobj(m=old)}:'
                 for k in new_dict.keys() | old_dict.keys():
                     n, o = new_dict.get(k), old_dict.get(k)
-                    notes += (f'\n        {k}: {repr(o)}' if o == n else
-                              f'\n      - {k}: {repr(o)}'
-                              f'\n      + {k}: {repr(n)}')
+                    notes += f'\n        {k}: {repr(n)}' if n == o else (
+                        (f'\n      - {k}: {repr(o)}' if o else '') +
+                        (f'\n      + {k}: {repr(n)}' if n else ''))
+            if not old.pinned:
+                notes += f'\n    Pinning {fobj(m=old)}'
+
             _logger.debug(notes or f'\n    No change for {fobj(m=old)}')
 
-        if content != old_content or new_dict != old_dict:
-            await old.edit(content=content, embed=embed)
+        async def maybe_edit():
+            if content != old_content or new_dict != old_dict:
+                await old.edit(content=content, embed=embed)
+
+        async def maybe_pin():
+            if not old.pinned:
+                await old.pin()
+
+        await asyncio.gather(maybe_edit(), maybe_pin())
