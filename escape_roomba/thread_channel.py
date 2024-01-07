@@ -325,7 +325,7 @@ class ThreadChannel:
         if (self._cached_intro is not None and
                 not any(u for u in rx_users if u != me) and
                 not any(m for m in self._cached_intro if m.author != me)):
-            _logger.info('\n    Unmaking {fobj(c=self.thread_channel)}')
+            _logger.info(f'\n    Unmaking {fobj(c=self.thread_channel)}')
             await asyncio.gather(
                 self.thread_channel.delete(),
                 origin.remove_reaction(_THREAD_EMOJI, me))
